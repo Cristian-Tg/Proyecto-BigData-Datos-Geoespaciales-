@@ -60,5 +60,9 @@ metastore_db/
 Thumbs.db
 desktop.ini
 
-# Documento fuente del enunciado (material del curso, no codigo)
+# El documento del enunciado es material del curso, no codigo
 Trabajo_Big_Data_Geoespacial-1.docx
+
+# Los .docx de docs/ SI se versionan: son entregables generados por
+# scripts/md2docx.js a partir del Markdown, que es la fuente de verdad.
+!docs/*.docx
