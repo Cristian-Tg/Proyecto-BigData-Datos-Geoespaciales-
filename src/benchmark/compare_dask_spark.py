@@ -319,7 +319,7 @@ def run_spark_grid(cores_max: int, executor_cores: int = 1,
     """
     from pyspark.sql import functions as F
 
-    from src.processing.spark_aggregations import build_spark, read_accidents
+    from src.processing.spark_aggregations import GRID_SCHEMA, build_spark, read_accidents
 
     spark = build_spark(
         app_name=f"Benchmark-Grid-cores{cores_max}",
@@ -340,7 +340,12 @@ def run_spark_grid(cores_max: int, executor_cores: int = 1,
     t_start = time.perf_counter()
 
     with MemorySampler(probe, interval=1.0) as sampler:
-        df = read_accidents(spark)
+        # GRID_SCHEMA y no el esquema completo: el lado Dask proyecta solo
+        # {lat, lon, severity} en su find(), asi que leer los 19 campos aqui
+        # compararia volumenes de lectura distintos en lugar de motores.
+        # Medido con el esquema completo, Spark salia 7x mas lento, y la mayor
+        # parte de esa diferencia era lectura que Dask no estaba haciendo.
+        df = read_accidents(spark, schema=GRID_SCHEMA)
         agg = (df
                .filter(F.col("lat").isNotNull() & F.col("lon").isNotNull())
                .withColumn("grid_lat", F.round(

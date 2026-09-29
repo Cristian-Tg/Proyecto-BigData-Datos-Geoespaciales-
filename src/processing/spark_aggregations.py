@@ -69,6 +69,18 @@ ACCIDENT_SCHEMA = StructType([
     StructField("is_weekend", BooleanType(), True),
 ])
 
+# Esquema reducido a lo que necesita la agregacion por grilla.
+#
+# Lo usa el benchmark para que la comparacion con Dask sea JUSTA: el lado Dask
+# proyecta solo {lat, lon, severity} en el find() de MongoDB, asi que leer los
+# 19 campos de ACCIDENT_SCHEMA en el lado Spark medía dos trabajos distintos y
+# penalizaba a Spark por algo ajeno al motor.
+GRID_SCHEMA = StructType([
+    StructField("lat", DoubleType(), True),
+    StructField("lon", DoubleType(), True),
+    StructField("severity", IntegerType(), True),
+])
+
 DOW_NAMES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
 MONTH_NAMES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
                "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -179,8 +191,14 @@ def _driver_host() -> str:
 # Lectura / escritura
 # ---------------------------------------------------------------------------
 def read_accidents(spark: SparkSession, collection: str | None = None,
-                   use_schema: bool = True) -> DataFrame:
-    """Lee la coleccion principal desde MongoDB con el conector oficial."""
+                   use_schema: bool = True,
+                   schema: StructType | None = None) -> DataFrame:
+    """Lee la coleccion principal desde MongoDB con el conector oficial.
+
+    `schema` permite leer solo un subconjunto de campos. El benchmark lo usa con
+    GRID_SCHEMA para igualar la proyeccion del lado Dask; leer 19 campos frente a
+    3 no compara motores, compara volumenes de lectura distintos.
+    """
     # Tamano de particion de LECTURA, en MB.
     #
     # Es la palanca que controla cuanta memoria necesita cada tarea, y la que
@@ -196,11 +214,15 @@ def read_accidents(spark: SparkSession, collection: str | None = None,
               .option("database", config.mongo.database)
               .option("collection", collection or config.mongo.collection)
               .option("partitioner.options.partition.size", part_mb))
-    if use_schema:
+    if schema is not None:
+        reader = reader.schema(schema)
+    elif use_schema:
         reader = reader.schema(ACCIDENT_SCHEMA)
     df = reader.load()
-    log.info("Leida la coleccion '%s' desde MongoDB (particiones de %s MB)",
-             collection or config.mongo.collection, part_mb)
+    n_campos = len((schema or ACCIDENT_SCHEMA).fields) if (schema or use_schema) else 0
+    log.info("Leida la coleccion '%s' desde MongoDB (particiones de %s MB, "
+             "%s campos)", collection or config.mongo.collection, part_mb,
+             n_campos or "todos")
     return df
 
 
