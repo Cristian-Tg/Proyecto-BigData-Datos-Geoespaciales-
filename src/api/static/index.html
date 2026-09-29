@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Consulta geoespacial de accidentes</title>
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --bg:#0f1420; --panel:#18202f; --panel-2:#1f2937; --line:#2b3648;
+    --ink:#e6ebf4; --muted:#93a1b8; --accent:#4f9cf9; --accent-ink:#0b1220;
+    --ok:#34d399; --warn:#fbbf24; --bad:#f87171;
+    --s1:#60a5fa; --s2:#34d399; --s3:#fbbf24; --s4:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); display:flex; flex-direction:column;
+  }
+  header{
+    padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+  }
+  header h1{font-size:15px; margin:0; letter-spacing:.2px}
+  header .sub{color:var(--muted); font-size:12px}
+  header .spacer{flex:1}
+  #status{font-size:12px; color:var(--muted)}
+  #status b{color:var(--ink); font-variant-numeric:tabular-nums}
+
+  main{flex:1; display:flex; min-height:0}
+  #side{
+    width:340px; flex:0 0 340px; background:var(--panel); overflow-y:auto;
+    border-right:1px solid var(--line); padding:12px;
+  }
+  #map{flex:1; min-width:0; background:#111827}
+
+  fieldset{border:1px solid var(--line); border-radius:8px; padding:10px 12px 12px;
+           margin:0 0 12px}
+  legend{padding:0 6px; font-size:12px; font-weight:600; color:var(--accent);
+         text-transform:uppercase; letter-spacing:.6px}
+  label{display:block; font-size:11px; color:var(--muted); margin:8px 0 3px;
+        text-transform:uppercase; letter-spacing:.4px}
+  input,select,textarea{
+    width:100%; padding:7px 8px; border-radius:6px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--ink); font:inherit; font-size:13px;
+  }
+  textarea{font-family:ui-monospace,Consolas,monospace; font-size:11px; min-height:76px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent); outline-offset:-1px}
+  .row{display:flex; gap:8px}
+  .row>*{flex:1; min-width:0}
+  button{
+    width:100%; margin-top:10px; padding:9px 10px; border:0; border-radius:6px;
+    background:var(--accent); color:var(--accent-ink); font-weight:650;
+    font-size:13px; cursor:pointer;
+  }
+  button:hover{filter:brightness(1.08)}
+  button.ghost{background:transparent; color:var(--accent);
+               border:1px solid var(--line); font-weight:500}
+  .hint{font-size:11px; color:var(--muted); margin-top:6px; line-height:1.45}
+  .out{
+    margin-top:10px; padding:8px; border-radius:6px; background:var(--panel-2);
+    border:1px solid var(--line); font-family:ui-monospace,Consolas,monospace;
+    font-size:11px; white-space:pre-wrap; max-height:190px; overflow:auto;
+  }
+  .legend{display:flex; gap:10px; flex-wrap:wrap; font-size:11px; color:var(--muted)}
+  .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;
+            margin-right:4px;vertical-align:-1px}
+  .pill{display:inline-block; padding:1px 7px; border-radius:99px; font-size:11px;
+        background:var(--panel-2); border:1px solid var(--line); color:var(--muted)}
+  .pill.ok{color:var(--ok);border-color:#14532d}
+  .pill.bad{color:var(--bad);border-color:#7f1d1d}
+  .leaflet-popup-content{font-size:12px}
+  @media (max-width:860px){
+    main{flex-direction:column}
+    #side{width:auto; flex:0 0 auto; max-height:46vh; border-right:0;
+          border-bottom:1px solid var(--line)}
+    #map{min-height:340px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Consulta geoespacial de accidentes</h1>
+  <span class="sub">MongoDB 2dsphere · Dask · Spark · Flask</span>
+  <span class="spacer"></span>
+  <span id="status">conectando…</span>
+</header>
+
+<main>
+  <aside id="side">
+
+    <fieldset>
+      <legend>1 · Radio ($near)</legend>
+      <div class="row">
+        <div><label for="lat">Latitud</label><input id="lat" value="34.0522"></div>
+        <div><label for="lon">Longitud</label><input id="lon" value="-118.2437"></div>
+      </div>
+      <div class="row">
+        <div><label for="radius">Radio (m)</label><input id="radius" value="5000"></div>
+        <div><label for="nlimit">Límite</label><input id="nlimit" value="300"></div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="minsev">Severidad mín.</label>
+          <select id="minsev">
+            <option value="">cualquiera</option>
+            <option value="2">≥ 2</option><option value="3">≥ 3</option>
+            <option value="4">= 4</option>
+          </select>
+        </div>
+        <div><label for="state">Estado</label><input id="state" placeholder="CA"></div>
+      </div>
+      <button id="btn-near">Buscar por radio</button>
+      <p class="hint">Clic en el mapa para fijar el centro.</p>
+      <div class="out" id="out-near">—</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>2 · Polígono ($geoWithin)</legend>
+      <label for="poly">GeoJSON Polygon</label>
+      <textarea id="poly" spellcheck="false"></textarea>
+      <div class="row">
+        <button class="ghost" id="btn-bbox">Usar vista actual</button>
+        <button class="ghost" id="btn-draw">Dibujar</button>
+      </div>
+      <button id="btn-within">Buscar en el polígono</button>
+      <p class="hint">«Dibujar»: arrastra sobre el mapa con Shift para trazar un
+        rectángulo.</p>
+      <div class="out" id="out-within">—</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>3 · Resultados de Spark</legend>
+      <label for="agg">Agregación</label>
+      <select id="agg">
+        <option value="hotspots">hotspots — zonas de alta concentración</option>
+        <option value="grid">grid — conteo por celda</option>
+        <option value="geohash">geohash — conteo por geohash</option>
+        <option value="state">state — resumen por estado</option>
+        <option value="temporal">temporal — hora / día / mes / año</option>
+      </select>
+      <div class="row">
+        <div><label for="alimit">Límite</label><input id="alimit" value="150"></div>
+        <div>
+          <label for="adim">Dimensión</label>
+          <select id="adim">
+            <option value="">(solo temporal)</option>
+            <option value="hour">hour</option><option value="dow">dow</option>
+            <option value="month">month</option><option value="year">year</option>
+          </select>
+        </div>
+      </div>
+      <button id="btn-agg">Cargar agregación</button>
+      <div class="out" id="out-agg">—</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>4 · Agregación $geoNear</legend>
+      <div class="row">
+        <div><label for="gnr">Radio (m)</label><input id="gnr" value="20000"></div>
+        <div>
+          <label for="gnby">Agrupar por</label>
+          <select id="gnby">
+            <option value="severity">severity</option>
+            <option value="distance_band">distance_band</option>
+            <option value="city">city</option><option value="hour">hour</option>
+            <option value="dow">dow</option><option value="weather">weather</option>
+            <option value="state">state</option>
+          </select>
+        </div>
+      </div>
+      <button id="btn-geonear">Ejecutar $geoNear</button>
+      <div class="out" id="out-geonear">—</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Leyenda</legend>
+      <div class="legend">
+        <span><i style="background:var(--s1)"></i>sev 1</span>
+        <span><i style="background:var(--s2)"></i>sev 2</span>
+        <span><i style="background:var(--s3)"></i>sev 3</span>
+        <span><i style="background:var(--s4)"></i>sev 4</span>
+      </div>
+      <button class="ghost" id="btn-clear">Limpiar el mapa</button>
+      <p class="hint">Documentación de la API:
+        <a href="/api/v1/docs" style="color:var(--accent)">/api/v1/docs</a></p>
+    </fieldset>
+
+  </aside>
+  <div id="map"></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+  "use strict";
+  const API = "/api/v1";
+  const SEV = {1:"#60a5fa", 2:"#34d399", 3:"#fbbf24", 4:"#f87171"};
+
+  const map = L.map("map", {preferCanvas:true}).setView([37.8, -96], 4);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:19, subdomains:"abcd"
+  }).addTo(map);
+
+  const layers = {
+    points: L.layerGroup().addTo(map),
+    shapes: L.layerGroup().addTo(map),
+    agg:    L.layerGroup().addTo(map),
+  };
+  L.control.layers(null, {
+    "Puntos":layers.points, "Geometrías":layers.shapes, "Agregaciones":layers.agg
+  }, {collapsed:false}).addTo(map);
+
+  const $ = id => document.getElementById(id);
+  const num = id => parseFloat($(id).value);
+  const show = (id, obj) => { $(id).textContent =
+      typeof obj === "string" ? obj : JSON.stringify(obj, null, 1); };
+
+  async function getJSON(url, opts){
+    const res = await fetch(url, opts);
+    const body = await res.json().catch(() => ({error:"respuesta no JSON"}));
+    if(!res.ok) throw new Error(body.message || body.error || ("HTTP "+res.status));
+    return body;
+  }
+
+  function attrParams(p){
+    const ms = $("minsev").value, st = $("state").value.trim();
+    if(ms) p.set("min_severity", ms);
+    if(st) p.set("state", st.toUpperCase());
+    return p;
+  }
+
+  function plotPoints(items){
+    layers.points.clearLayers();
+    const pts = [];
+    for(const d of items){
+      if(typeof d.lat !== "number" || typeof d.lon !== "number") continue;
+      pts.push([d.lat, d.lon]);
+      L.circleMarker([d.lat, d.lon], {
+        radius:4, weight:1, color:"#0b1220", fillColor:SEV[d.severity]||"#9ca3af",
+        fillOpacity:.85
+      }).bindPopup(
+        `<b>${d.city||"—"}, ${d.state||"—"}</b><br>` +
+        `Severidad: <b>${d.severity ?? "—"}</b><br>` +
+        `Fecha: ${d.start_time ? String(d.start_time).slice(0,16).replace("T"," ") : "—"}<br>` +
+        `Clima: ${d.weather||"—"}<br>` +
+        `<code>${d.lat.toFixed(5)}, ${d.lon.toFixed(5)}</code>`
+      ).addTo(layers.points);
+    }
+    return pts;
+  }
+
+  // ---------------- 1. $near ------------------------------------------------
+  let centerMarker = null, radiusCircle = null;
+  function drawCenter(lat, lon, r){
+    if(centerMarker) map.removeLayer(centerMarker);
+    if(radiusCircle) map.removeLayer(radiusCircle);
+    centerMarker = L.marker([lat, lon]).addTo(map);
+    radiusCircle = L.circle([lat, lon], {radius:r, color:"#4f9cf9", weight:2,
+                                         fillOpacity:.06, dashArray:"5 5"}).addTo(map);
+  }
+
+  $("btn-near").onclick = async () => {
+    const lat = num("lat"), lon = num("lon"), r = num("radius");
+    if(![lat,lon,r].every(Number.isFinite)) return show("out-near","Valores inválidos.");
+    show("out-near", "consultando…");
+    const p = attrParams(new URLSearchParams({
+      lat, lon, radius_m:r, limit:$("nlimit").value }));
+    try{
+      const data = await getJSON(`${API}/near?`+p);
+      drawCenter(lat, lon, r);
+      plotPoints(data.results);
+      map.fitBounds(radiusCircle.getBounds(), {padding:[30,30]});
+      show("out-near", {operador:"$near", devueltos:data.returned,
+        total_en_radio:data.total_matching, ms:data.elapsed_ms});
+    }catch(e){ show("out-near", "ERROR: "+e.message); }
+  };
+
+  map.on("click", ev => {
+    if(drawing) return;
+    $("lat").value = ev.latlng.lat.toFixed(6);
+    $("lon").value = ev.latlng.lng.toFixed(6);
+    drawCenter(ev.latlng.lat, ev.latlng.lng, num("radius")||5000);
+  });
+
+  // ---------------- 2. $geoWithin ------------------------------------------
+  function bboxPolygon(b){
+    const w = b.getWest(), s = b.getSouth(), e = b.getEast(), n = b.getNorth();
+    return {type:"Polygon", coordinates:[[[w,s],[e,s],[e,n],[w,n],[w,s]]]};
+  }
+  const setPoly = g => { $("poly").value = JSON.stringify(g); };
+  setPoly({type:"Polygon", coordinates:[[
+    [-118.55,33.90],[-118.10,33.90],[-118.10,34.15],[-118.55,34.15],[-118.55,33.90]]]});
+
+  $("btn-bbox").onclick = () => setPoly(bboxPolygon(map.getBounds()));
+
+  let drawing = false, dragStart = null, rubber = null;
+  $("btn-draw").onclick = () => {
+    drawing = !drawing;
+    $("btn-draw").textContent = drawing ? "Cancelar" : "Dibujar";
+    map.getContainer().style.cursor = drawing ? "crosshair" : "";
+    map.boxZoom[drawing ? "disable" : "enable"]();
+  };
+  map.on("mousedown", ev => { if(drawing){ dragStart = ev.latlng; map.dragging.disable(); }});
+  map.on("mousemove", ev => {
+    if(!drawing || !dragStart) return;
+    if(rubber) map.removeLayer(rubber);
+    rubber = L.rectangle(L.latLngBounds(dragStart, ev.latlng),
+      {color:"#fbbf24", weight:2, fillOpacity:.08}).addTo(map);
+  });
+  map.on("mouseup", ev => {
+    if(!drawing || !dragStart) return;
+    setPoly(bboxPolygon(L.latLngBounds(dragStart, ev.latlng)));
+    dragStart = null; drawing = false; map.dragging.enable();
+    map.boxZoom.enable();
+    $("btn-draw").textContent = "Dibujar";
+    map.getContainer().style.cursor = "";
+  });
+
+  $("btn-within").onclick = async () => {
+    let geometry;
+    try{ geometry = JSON.parse($("poly").value); }
+    catch(e){ return show("out-within","GeoJSON mal formado: "+e.message); }
+    show("out-within", "consultando…");
+    const body = {geometry, limit:parseInt($("nlimit").value,10)||300, summary:true};
+    const ms = $("minsev").value, st = $("state").value.trim();
+    if(ms) body.min_severity = parseInt(ms,10);
+    if(st) body.state = st.toUpperCase();
+    try{
+      const data = await getJSON(`${API}/within`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(body)});
+      layers.shapes.clearLayers();
+      if(rubber){ map.removeLayer(rubber); rubber = null; }
+      const shape = L.geoJSON(geometry, {style:{color:"#fbbf24", weight:2,
+                                                fillOpacity:.05}}).addTo(layers.shapes);
+      plotPoints(data.results);
+      map.fitBounds(shape.getBounds(), {padding:[30,30]});
+      show("out-within", {operador:"$geoWithin", devueltos:data.returned,
+        total_en_poligono:data.total_matching, ms:data.elapsed_ms,
+        resumen:data.summary});
+    }catch(e){ show("out-within","ERROR: "+e.message); }
+  };
+
+  // ---------------- 3. agregaciones de Spark -------------------------------
+  $("btn-agg").onclick = async () => {
+    const name = $("agg").value;
+    const p = new URLSearchParams({limit:$("alimit").value});
+    if(name === "temporal" && $("adim").value) p.set("dimension", $("adim").value);
+    show("out-agg", "consultando…");
+    try{
+      const data = await getJSON(`${API}/aggregations/${name}?`+p);
+      layers.agg.clearLayers();
+      const rows = data.results || [];
+      if(!rows.length){
+        return show("out-agg","La colección está vacía. Ejecute el "+
+          "procesamiento con Spark:\ndocker compose run --rm spark-submit");
+      }
+      const counts = rows.map(r => r.count||0);
+      const maxC = Math.max(1, ...counts);
+      const bounds = [];
+      for(const r of rows){
+        const c = r.centroid;
+        if(!c || !Array.isArray(c.coordinates)) continue;
+        const [lon, lat] = c.coordinates;
+        bounds.push([lat, lon]);
+        const t = (r.count||0)/maxC;
+        L.circleMarker([lat, lon], {
+          radius: 4 + Math.sqrt(t)*22, weight:1, color:"#0b1220",
+          fillColor: t>.66 ? "#f87171" : t>.33 ? "#fbbf24" : "#34d399",
+          fillOpacity:.55
+        }).bindPopup(
+          `<b>${r.grid_id||r.geohash||r.state||"celda"}</b><br>` +
+          (r.rank ? `Ranking: <b>#${r.rank}</b><br>` : "") +
+          `Registros: <b>${(r.count||0).toLocaleString("es")}</b><br>` +
+          `Severidad media: ${r.avg_severity ?? "—"}<br>` +
+          (r.concentration_index ? `Índice de concentración: ${r.concentration_index}<br>` : "") +
+          (r.pct_of_total ? `% del total: ${r.pct_of_total}%` : "")
+        ).addTo(layers.agg);
+      }
+      if(bounds.length) map.fitBounds(bounds, {padding:[30,30]});
+      show("out-agg", {agregacion:data.aggregation, coleccion:data.collection,
+        origen:data.source, devueltos:data.returned, total:data.total_matching,
+        ms:data.elapsed_ms,
+        muestra:rows.slice(0,3).map(r => ({
+          clave:r.grid_id||r.geohash||r.state||r.label, n:r.count,
+          sev:r.avg_severity}))});
+    }catch(e){ show("out-agg","ERROR: "+e.message); }
+  };
+
+  // ---------------- 4. $geoNear -------------------------------------------
+  $("btn-geonear").onclick = async () => {
+    const lat = num("lat"), lon = num("lon");
+    if(![lat,lon].every(Number.isFinite)) return show("out-geonear","Centro inválido.");
+    const p = attrParams(new URLSearchParams({
+      lat, lon, max_distance_m:$("gnr").value, group_by:$("gnby").value,
+      band_width_m:2000, limit:40}));
+    show("out-geonear","consultando…");
+    try{
+      const data = await getJSON(`${API}/geonear?`+p);
+      drawCenter(lat, lon, parseFloat($("gnr").value));
+      show("out-geonear", {operador:"$geoNear", agrupado_por:data.query.group_by,
+        grupos:data.groups_returned, total_en_radio:data.total_in_radius,
+        ms:data.elapsed_ms,
+        detalle:data.groups.map(g => ({grupo:g.group, n:g.count,
+          dist_media_m:g.avg_distance_m, sev_media:g.avg_severity}))});
+    }catch(e){ show("out-geonear","ERROR: "+e.message); }
+  };
+
+  // ---------------- utilidades --------------------------------------------
+  $("btn-clear").onclick = () => {
+    Object.values(layers).forEach(l => l.clearLayers());
+    if(centerMarker){ map.removeLayer(centerMarker); centerMarker = null; }
+    if(radiusCircle){ map.removeLayer(radiusCircle); radiusCircle = null; }
+    ["out-near","out-within","out-agg","out-geonear"].forEach(i => show(i,"—"));
+  };
+
+  (async function boot(){
+    try{
+      const s = await getJSON(`${API}/stats`);
+      const main = s.collections[Object.keys(s.collections)[0]];
+      const n = main ? main.count : 0;
+      $("status").innerHTML =
+        `<b>${n.toLocaleString("es")}</b> registros · ` +
+        `2dsphere <span class="pill ${s.geo_index_2dsphere?"ok":"bad"}">` +
+        `${s.geo_index_2dsphere?"activo":"ausente"}</span> · ` +
+        `<span class="pill ${s.ready_for_queries?"ok":"bad"}">` +
+        `${s.ready_for_queries?"listo":"sin datos"}</span>`;
+    }catch(e){
+      $("status").innerHTML = `<span class="pill bad">API no disponible</span>`;
+    }
+  })();
+})();
+</script>
+</body>
+</html>
