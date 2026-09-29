@@ -113,6 +113,99 @@ def _unzip_all(zip_path: Path, dest: Path) -> list[Path]:
     return extracted
 
 
+ZIP_MAGIC = b"PK\x03\x04"
+CHUNK_BYTES = 1024 * 1024          # 1 MiB por trozo
+KAGGLE_API = "https://www.kaggle.com/api/v1"
+
+
+def _is_zip(path: Path) -> bool:
+    """True si el archivo empieza por la firma de un ZIP."""
+    try:
+        with path.open("rb") as fh:
+            return fh.read(4) == ZIP_MAGIC
+    except OSError:
+        return False
+
+
+def stream_download(dataset: str, target_file: str, dest: Path,
+                    user: str, key: str,
+                    timeout: tuple[int, int] = (30, 600)) -> Path:
+    """Descarga un archivo del dataset en STREAMING y devuelve la ruta cruda.
+
+    Por que no se usa `KaggleApi.dataset_download_file`:
+
+    esa funcion acumula la respuesta completa en memoria antes de escribirla.
+    Con el CSV de US Accidents (1,2 GB comprimidos) eso hace que el contenedor
+    de ingesta llegue a su limite y el kernel lo mate. Medido: el contenedor
+    alcanza exactamente 700 MiB / 700 MiB y muere con SIGKILL (exit 137), sin
+    ningun mensaje que mencione la memoria.
+
+    Aqui se llama al mismo endpoint REST de Kaggle con `stream=True` y se
+    escribe por trozos de 1 MiB, de modo que la memoria usada es constante e
+    independiente del tamano del dataset. Ademas el progreso es visible, lo que
+    importa en una descarga de varios minutos.
+    """
+    import requests  # noqa: PLC0415 - solo hace falta en este camino
+
+    url = f"{KAGGLE_API}/datasets/download/{dataset}"
+    params = {"file_name": target_file} if target_file else {}
+
+    log.info("Descargando en streaming desde %s (archivo %s)...", dataset,
+             target_file or "<todo el dataset>")
+
+    tmp = dest / f".{target_file or 'dataset'}.part"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+
+    with requests.get(url, params=params, auth=(user, key), stream=True,
+                      timeout=timeout, allow_redirects=True) as resp:
+        if resp.status_code == 403:
+            raise PermissionError(
+                f"Kaggle devolvio 403 para '{dataset}'. Lo habitual es no haber "
+                "aceptado las condiciones del dataset: entre a "
+                f"https://www.kaggle.com/datasets/{dataset} con la misma cuenta "
+                "del token y acepte las reglas."
+            )
+        if resp.status_code == 404:
+            raise FileNotFoundError(
+                f"Kaggle devolvio 404. Verifique el slug '{dataset}' y el nombre "
+                f"del archivo '{target_file}'."
+            )
+        resp.raise_for_status()
+
+        total = int(resp.headers.get("Content-Length") or 0)
+        escritos = 0
+        siguiente_aviso = 100 * 1024 * 1024        # avisar cada 100 MB
+
+        with tmp.open("wb") as fh:
+            for chunk in resp.iter_content(chunk_size=CHUNK_BYTES):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                escritos += len(chunk)
+                if escritos >= siguiente_aviso:
+                    if total:
+                        log.info("  %.0f MB de %.0f MB (%.0f%%)",
+                                 escritos / 1048576, total / 1048576,
+                                 100 * escritos / total)
+                    else:
+                        log.info("  %.0f MB descargados", escritos / 1048576)
+                    siguiente_aviso += 100 * 1024 * 1024
+
+    if total and escritos != total:
+        tmp.unlink(missing_ok=True)
+        raise OSError(
+            f"Descarga incompleta: {escritos} de {total} bytes. Reintente."
+        )
+
+    log.info("Descarga terminada: %.1f MB", escritos / 1048576)
+
+    # Kaggle entrega un ZIP o el archivo crudo segun el tamano; se decide por
+    # la firma del archivo y no por la extension, que no siempre viene.
+    final = dest / (f"{target_file}.zip" if _is_zip(tmp) else target_file)
+    tmp.replace(final)
+    return final
+
+
 def download_dataset(dataset: str | None = None,
                      target_file: str | None = None,
                      data_dir: str | None = None,
@@ -142,23 +235,36 @@ def download_dataset(dataset: str | None = None,
             "KAGGLE_KEY, o monte kaggle.json en /run/secrets/kaggle.json. "
             "Consulte el README, seccion 'Credenciales'."
         )
-    install_credentials(*creds)
+    user, key = creds
+    install_credentials(user, key)
 
-    # La libreria de Kaggle se autentica en el import, por eso se importa aqui
-    from kaggle.api.kaggle_api_extended import KaggleApi  # noqa: PLC0415
-
-    api = KaggleApi()
-    api.authenticate()
-    log.info("Autenticado en Kaggle. Descargando %s (archivo %s)...",
-             dataset, target_file)
-
+    # --- camino principal: streaming propio -------------------------------
+    # Es el unico que funciona con memoria acotada; ver stream_download().
     try:
-        api.dataset_download_file(dataset, target_file, path=str(dest), force=force)
-    except Exception as exc:  # noqa: BLE001 - se degrada al dataset completo
-        log.warning("Fallo la descarga del archivo puntual (%s). "
-                    "Se intenta el dataset completo.", exc)
-        api.dataset_download_files(dataset, path=str(dest), unzip=False,
-                                   force=force)
+        stream_download(dataset, target_file, dest, user, key)
+    except (PermissionError, FileNotFoundError):
+        # Errores de credenciales o de nombre: no tiene sentido reintentar con
+        # la libreria, fallaria igual. Se propagan para que obtain_dataset()
+        # decida (avisar y caer al dataset sintetico).
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Cualquier otro fallo (cambio del endpoint, red) -> se intenta con la
+        # libreria oficial, aceptando su consumo de memoria como ultimo recurso.
+        log.warning("La descarga en streaming fallo (%s). Se reintenta con la "
+                    "libreria oficial de Kaggle, que consume mas memoria.", exc)
+
+        from kaggle.api.kaggle_api_extended import KaggleApi  # noqa: PLC0415
+
+        api = KaggleApi()
+        api.authenticate()
+        try:
+            api.dataset_download_file(dataset, target_file, path=str(dest),
+                                      force=force)
+        except Exception as exc2:  # noqa: BLE001
+            log.warning("Fallo la descarga del archivo puntual (%s). "
+                        "Se intenta el dataset completo.", exc2)
+            api.dataset_download_files(dataset, path=str(dest), unzip=False,
+                                       force=force)
 
     # Kaggle entrega .zip para archivos grandes y el .csv crudo para pequenos
     for zip_path in sorted(dest.glob("*.zip")):

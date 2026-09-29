@@ -21,3 +21,8 @@ kaggle==1.7.4.5
 
 # --- Medicion de memoria en el benchmark -----------------------------------
 psutil==6.1.0
+
+# Descarga en STREAMING del dataset (ver src/ingestion/download_kaggle.py):
+# la libreria de Kaggle acumula la respuesta en memoria y con 1,2 GB mata el
+# contenedor, asi que el endpoint REST se consume directamente con requests.
+requests==2.32.3
