@@ -21,6 +21,7 @@ import argparse
 import contextlib
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -199,7 +200,9 @@ def run_ingestion(csv_path: str | Path,
                   blocksize: str | None = None,
                   scheduler: str | None = None,
                   drop_existing: bool = False,
-                  stats_out: str | None = None) -> CleaningStats:
+                  stats_out: str | None = None,
+                  partition_order: str = "spread",
+                  partition_seed: int = 42) -> CleaningStats:
     """Ejecuta la ingesta completa y devuelve las estadisticas agregadas."""
     csv_path = Path(csv_path)
     if not csv_path.is_file():
@@ -243,13 +246,35 @@ def run_ingestion(csv_path: str | Path,
         inserted_total = 0
         dup_total = 0
 
+        # --- ORDEN DE LAS PARTICIONES -------------------------------------
+        # Cuando SAMPLE_SIZE es menor que el dataset completo, la ingesta se
+        # detiene antes de agotar las particiones. Recorrerlas en orden daria
+        # una muestra SESGADA, porque el CSV de Kaggle no esta ordenado al azar:
+        # medido sobre las 24 primeras de 191 particiones, la muestra contenia
+        # solo los anos 2016, 2017, 2021 y 2022, y faltaban 2018, 2019, 2020 y
+        # 2023 por completo. Con eso, la agregacion "accidentes por ano" que
+        # pide el enunciado mostraria un hueco que no existe en los datos.
+        #
+        # Se barajan los indices con una semilla fija: cualquier prefijo es
+        # entonces una muestra por conglomerados repartida por todo el archivo,
+        # y la semilla la mantiene reproducible entre ejecuciones.
+        order = list(range(npartitions))
+        if partition_order == "spread":
+            random.Random(partition_seed).shuffle(order)
+            log.info("Particiones en orden repartido (semilla %s): la muestra "
+                     "cubre todo el archivo, no solo su principio",
+                     partition_seed)
+        else:
+            log.warning("Particiones en orden secuencial: la muestra quedara "
+                        "sesgada hacia el principio del archivo")
+
         # Oleadas de tareas: 3 por worker mantiene el cluster saturado sin
         # inundar al scheduler ni la memoria del cliente.
         wave = max(2, n_workers * 3)
         idx = 0
 
         while idx < npartitions and inserted_total < sample_size:
-            batch_parts = parts[idx:idx + wave]
+            batch_parts = [parts[i] for i in order[idx:idx + wave]]
             tasks = [
                 dask.delayed(process_and_load)(
                     part, config.mongo.uri, config.mongo.database,
@@ -310,6 +335,8 @@ def run_ingestion(csv_path: str | Path,
                 "partitions_total": npartitions,
                 "blocksize": blocksize,
                 "batch_size": batch_size,
+                "partition_order": partition_order,
+                "partition_seed": partition_seed,
                 "source_file": str(csv_path),
                 "source_size_mb": round(size_mb, 2),
                 "geo_index_2dsphere": summary["geo_index_2dsphere"],
@@ -344,6 +371,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="Elimina la coleccion antes de cargar")
     ap.add_argument("--skip-download", action="store_true")
     ap.add_argument("--stats-out", default="/data/cleaning_stats.json")
+    ap.add_argument("--partition-order", choices=["spread", "sequential"],
+                    default=os.environ.get("PARTITION_ORDER", "spread"),
+                    help="'spread' (por defecto) reparte la muestra por todo el "
+                         "archivo; 'sequential' toma el principio y queda sesgada")
+    ap.add_argument("--partition-seed", type=int,
+                    default=int(os.environ.get("PARTITION_SEED", "42")),
+                    help="Semilla del barajado, para que la muestra sea reproducible")
     args = ap.parse_args(argv)
 
     csv_path = args.csv
@@ -370,6 +404,8 @@ def main(argv: list[str] | None = None) -> int:
         scheduler=args.scheduler,
         drop_existing=drop,
         stats_out=args.stats_out,
+        partition_order=args.partition_order,
+        partition_seed=args.partition_seed,
     )
     return 0
 
