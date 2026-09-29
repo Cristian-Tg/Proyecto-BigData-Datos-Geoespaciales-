@@ -197,6 +197,34 @@ reduzca el volumen que procesa la siguiente.
 | 6 | Descartar severidad fuera de 1–4 | Es la variable de ponderación de las zonas de alta concentración; un valor fuera del dominio contaminaría todos los promedios. |
 | 7 | Deduplicar por `accident_id` | Dentro de la partición con `drop_duplicates`; la unicidad **global** la garantiza el índice único junto con `insert_many(ordered=False)`. |
 
+**La muestra se toma repartida por todo el archivo, no del principio.** El
+enunciado permite trabajar con «una muestra de al menos un millón de registros».
+La forma obvia —leer particiones en orden hasta alcanzar el millón— produce una
+muestra **sesgada**, porque el CSV de Kaggle no está ordenado al azar.
+
+Se detectó al inspeccionar la primera ingesta real (24 de 191 particiones,
+1 021 487 registros):
+
+| Distribución obtenida | |
+|---|---|
+| Años presentes | 2016, 2017, 2021, 2022 |
+| Años **ausentes** | **2018, 2019, 2020, 2023** |
+| Estados distintos | 49 (eso sí era representativo) |
+
+Con esa muestra, la agregación «accidentes por año» que pide el enunciado
+mostraría un hueco de cuatro años que no existe en los datos, y el análisis
+temporal no diría nada real sobre el fenómeno.
+
+La corrección es barajar los índices de partición con una semilla fija antes de
+recorrerlos: cualquier prefijo es entonces una **muestra por conglomerados**
+repartida por todo el archivo, y la semilla la mantiene reproducible. Queda
+registrado en `cleaning_stats.json` (`partition_order`, `partition_seed`) para
+que el informe pueda declarar cómo se obtuvo la muestra.
+
+Es muestreo por conglomerados y no muestreo simple de filas —las particiones son
+bloques contiguos del archivo—, lo cual se declara explícitamente en lugar de
+presentarlo como aleatorio puro.
+
 **La descarga no usa la librería de Kaggle.** `KaggleApi.dataset_download_file`
 acumula la respuesta completa en memoria antes de escribirla en disco. Con el
 archivo de US Accidents (653 MB comprimidos) el contenedor de ingesta llegaba
