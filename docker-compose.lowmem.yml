@@ -56,7 +56,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768M
+          # 900M y no 768M: el healthcheck ejecuta `mongosh` DENTRO del
+          # contenedor, y ese proceso de Node.js consume ~150 MB que salen de
+          # este mismo limite. Con 768M y una cache de 0,4 GB, la sonda
+          # competia por memoria con el propio servidor.
+          memory: 900M
 
   # -------------------------------------------------------------------------
   api:

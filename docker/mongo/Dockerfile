@@ -12,5 +12,9 @@ FROM mongo:7.0
 # cuando el directorio de datos esta vacio.
 COPY docker/mongo/init/ /docker-entrypoint-initdb.d/
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=10 \
-  CMD mongosh --quiet --eval "db.adminCommand('ping').ok" || exit 1
+# El timeout generoso es deliberado: `mongosh` es un proceso de Node.js y
+# arrancarlo dentro del contenedor, bajo presion de CPU, supera facilmente los
+# 5 s aunque MongoDB este respondiendo con normalidad. Con 5 s el contenedor se
+# marcaba unhealthy y `depends_on: service_healthy` bloqueaba la ingesta.
+HEALTHCHECK --interval=20s --timeout=20s --start-period=40s --retries=6 \
+  CMD mongosh --quiet --norc --eval "db.adminCommand('ping').ok" || exit 1

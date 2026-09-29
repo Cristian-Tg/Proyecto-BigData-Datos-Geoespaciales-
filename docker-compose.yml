@@ -67,11 +67,20 @@ services:
       - --wiredTigerCacheSizeGB
       - "1"
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
+    # timeout de 20 s y no de 5: la sonda usa `mongosh`, que es un proceso de
+    # Node.js. Arrancarlo dentro del contenedor cuesta segundos, y bajo presion
+    # de CPU (por ejemplo mientras se descomprime un CSV de 3 GB) supera los 5 s.
+    # El sintoma era "Health check exceeded timeout (5s)" con MongoDB
+    # funcionando perfectamente, y `depends_on: service_healthy` bloqueando
+    # entonces la ingesta con "container geo-mongo is unhealthy".
+    #
+    # --norc evita cargar el archivo de inicio de mongosh, que anade arranque.
+      test: ["CMD", "mongosh", "--quiet", "--norc", "--eval",
+             "db.adminCommand('ping').ok"]
+      interval: 20s
+      timeout: 20s
+      retries: 6
+      start_period: 40s
     networks: [geonet]
     logging: *default-logging
 
