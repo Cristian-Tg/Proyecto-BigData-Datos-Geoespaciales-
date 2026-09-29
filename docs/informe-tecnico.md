@@ -197,6 +197,29 @@ reduzca el volumen que procesa la siguiente.
 | 6 | Descartar severidad fuera de 1–4 | Es la variable de ponderación de las zonas de alta concentración; un valor fuera del dominio contaminaría todos los promedios. |
 | 7 | Deduplicar por `accident_id` | Dentro de la partición con `drop_duplicates`; la unicidad **global** la garantiza el índice único junto con `insert_many(ordered=False)`. |
 
+**La descarga no usa la librería de Kaggle.** `KaggleApi.dataset_download_file`
+acumula la respuesta completa en memoria antes de escribirla en disco. Con el
+archivo de US Accidents (653 MB comprimidos) el contenedor de ingesta llegaba
+exactamente a su límite y el kernel lo mataba con SIGKILL, y el log no mencionaba
+la memoria en ningún momento: la última línea era `Dataset URL: …` y después
+nada.
+
+El proyecto consume el endpoint REST de Kaggle directamente con `requests` y
+`stream=True`, escribiendo en trozos de 1 MiB, de modo que la memoria es
+constante e independiente del tamaño del dataset:
+
+| | Memoria pico | Resultado |
+|---|---:|---|
+| `dataset_download_file` | 700 MiB (el límite) | SIGKILL, sin descarga |
+| Streaming propio | **166 MiB** | 653 MB descargados → CSV de 2 916,5 MB |
+
+Se añaden tres cosas que la librería no daba: el tipo de archivo se decide por
+la firma ZIP y no por la extensión (Kaggle no siempre la incluye), se compara
+`Content-Length` con los bytes escritos para no dejar un CSV truncado que
+fallaría después con un error confuso, y se informa del progreso cada 100 MB
+porque en una descarga de varios minutos el silencio no distingue «avanzando» de
+«colgado». La librería oficial queda como último recurso si el endpoint cambiara.
+
 **Resultados medidos** — ⚠️ rellenar con `reports/cleaning_stats.json`, que la
 ingesta escribe al terminar (`docker compose run --rm ingestion`):
 
