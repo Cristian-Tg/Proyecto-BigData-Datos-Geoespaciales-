@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from bson import ObjectId
@@ -45,7 +45,7 @@ def jsonify_doc(doc: Any) -> Any:
         return str(doc)
     if isinstance(doc, datetime):
         if doc.tzinfo is None:
-            doc = doc.replace(tzinfo=UTC)
+            doc = doc.replace(tzinfo=timezone.utc)
         return doc.isoformat()
     return doc
 

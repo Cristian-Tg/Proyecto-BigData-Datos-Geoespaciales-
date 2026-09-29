@@ -8,7 +8,7 @@ test_integration.py.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 from bson import ObjectId
@@ -85,11 +85,11 @@ def sample_docs():
     return [
         {"_id": ObjectId(), "accident_id": "A-1", "lat": 34.05, "lon": -118.24,
          "severity": 3, "city": "Los Angeles", "state": "CA",
-         "start_time": datetime(2021, 2, 8, 5, 46, tzinfo=UTC),
+         "start_time": datetime(2021, 2, 8, 5, 46, tzinfo=timezone.utc),
          "location": {"type": "Point", "coordinates": [-118.24, 34.05]}},
         {"_id": ObjectId(), "accident_id": "A-2", "lat": 34.06, "lon": -118.25,
          "severity": 2, "city": "Los Angeles", "state": "CA",
-         "start_time": datetime(2021, 3, 9, 6, 7, tzinfo=UTC),
+         "start_time": datetime(2021, 3, 9, 6, 7, tzinfo=timezone.utc),
          "location": {"type": "Point", "coordinates": [-118.25, 34.06]}},
     ]
 
@@ -106,7 +106,7 @@ class TestSerializacion:
     def test_las_fechas_pasan_a_iso8601(self):
         out = queries.jsonify_doc({"t": datetime(2021, 2, 8, 5, 46)})
         assert out["t"].startswith("2021-02-08T05:46:00")
-        assert "+00:00" in out["t"], "se asume UTC cuando no hay zona horaria"
+        assert "+00:00" in out["t"], "se asume timezone.utc cuando no hay zona horaria"
 
     def test_funciona_de_forma_recursiva(self):
         oid = ObjectId()
@@ -156,8 +156,8 @@ class TestFiltroDeAtributos:
         assert out["city"]["$regex"] == r"^\.\*$"
 
     def test_rango_de_fechas(self):
-        desde = datetime(2021, 1, 1, tzinfo=UTC)
-        hasta = datetime(2021, 12, 31, tzinfo=UTC)
+        desde = datetime(2021, 1, 1, tzinfo=timezone.utc)
+        hasta = datetime(2021, 12, 31, tzinfo=timezone.utc)
         out = queries.build_attribute_filter(start_date=desde, end_date=hasta)
         assert out["start_time"] == {"$gte": desde, "$lte": hasta}
 

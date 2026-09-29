@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import platform
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -115,7 +115,7 @@ def _date_param(name: str, source: dict[str, Any] | None = None
     for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
                 "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=UTC)
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     raise BadParam(f"'{name}' debe tener formato ISO (AAAA-MM-DD), se recibio {raw!r}")
@@ -250,7 +250,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
             "service": "geobigdata-api",
             "uptime_seconds": round(time.time() - START_TIME, 1),
             "python": platform.python_version(),
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         try:
             db = _db()

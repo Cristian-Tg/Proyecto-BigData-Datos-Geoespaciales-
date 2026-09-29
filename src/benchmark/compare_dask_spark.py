@@ -31,7 +31,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -442,7 +442,7 @@ def run_benchmark(dask_configs: list[int], spark_configs: list[int],
                   spark_master: str | None = None,
                   out_dir: str = "/data/benchmark") -> dict[str, Any]:
     run_id = uuid.uuid4().hex[:12]
-    started = datetime.now(UTC)
+    started = datetime.now(timezone.utc)
 
     log.info("=" * 72)
     log.info("  BENCHMARK  Dask vs Spark   |   operacion: %s", OPERATION)
@@ -493,7 +493,7 @@ def run_benchmark(dask_configs: list[int], spark_configs: list[int],
         "operation": OPERATION,
         "cell_deg": cell_deg,
         "started_at": started.isoformat(),
-        "finished_at": datetime.now(UTC).isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
         "repeats": repeats,
         "host": {
             "platform": platform.platform(),

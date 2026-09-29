@@ -1,4 +1,14 @@
-target-version = "py311"
+# py310 y NO py311, aunque la mayoria de las imagenes usen 3.11.
+#
+# El proyecto corre DOS versiones de Python:
+#   python:3.11-slim  -> dask, api, tests   (3.11.16)
+#   imagen de Spark   -> spark, benchmark   (3.10.12)
+#
+# Con target py311, el autofix de ruff convirtio `timezone.utc` en
+# `datetime.UTC`, que solo existe desde 3.11. El resultado fue un
+# ImportError en tiempo de EJECUCION dentro de la imagen de Spark, con el
+# linter en verde. Hay que apuntar al minimo comun, no a la mayoria.
+target-version = "py310"
 line-length = 100
 
 exclude = [".git", "__pycache__", ".venv", "data", "notebooks"]
