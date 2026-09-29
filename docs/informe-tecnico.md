@@ -248,22 +248,57 @@ fallaría después con un error confuso, y se informa del progreso cada 100 MB
 porque en una descarga de varios minutos el silencio no distingue «avanzando» de
 «colgado». La librería oficial queda como último recurso si el endpoint cambiara.
 
-**Resultados medidos** — ⚠️ rellenar con `reports/cleaning_stats.json`, que la
-ingesta escribe al terminar (`docker compose run --rm ingestion`):
+**Resultados medidos sobre el dataset real** (de `cleaning_stats.json`, que la
+ingesta escribe al terminar):
 
-| Concepto | Registros | % |
-|---|---:|---:|
-| Leídos del CSV | | 100 % |
-| − Coordenadas nulas | | |
-| − Fuera de rango WGS84 | | |
-| − Relleno (0,0) | | |
-| − Fuera de la caja de EE. UU. | | |
-| − Fecha no parseable | | |
-| − Severidad inválida | | |
-| − Duplicados por ID | | |
-| **Cargados en MongoDB** | | |
-| Duplicados rechazados por el índice único | | |
-| Tiempo de ingesta / registros por segundo | | |
+| Concepto | Registros |
+|---|---:|
+| Leidos del CSV | 1 240 933 |
+| Descartados por las 7 reglas | **0** |
+| Cargados en MongoDB | 1 240 933 |
+| Tasa de retencion | **100,00 %** |
+| Particiones procesadas | 30 de 191 |
+| Tiempo de ingesta | 815,2 s (1 522 registros/s) |
+
+#### Por que la retencion es del 100 %, y por que la limpieza sigue siendo necesaria
+
+Una tabla de ceros invita a pensar que las reglas no hacen nada. No es el caso, y
+conviene ser explicito sobre las dos cosas distintas que se estan midiendo.
+
+**Lo que dice el cero:** la version de marzo de 2023 de US Accidents ya viene
+limpia en las siete dimensiones que se validan. `Start_Lat` y `Start_Lng` estan
+completas, `Severity` siempre esta en 1..4, los `ID` son unicos y `Start_Time` es
+parseable. Las columnas que si tienen huecos en este dataset son otras
+(`End_Lat`, `Wind_Chill`, `Precipitation`) y ninguna interviene en la validez
+geoespacial ni en el analisis temporal, asi que no se filtra por ellas.
+
+**Por que las reglas siguen siendo necesarias:**
+
+- Son la barrera que impide que un registro corrupto aborte una carga de un
+  millon de documentos. Una sola coordenada fuera de rango WGS84 hace que MongoDB
+  rechace el documento al construir el indice `2dsphere`; sin el filtro previo,
+  ese fallo aparece a mitad de la ingesta.
+- El validador `$jsonSchema` de MongoDB las respalda como ultima linea de
+  defensa, de modo que hay dos capas independientes.
+- **Estan verificadas, no supuestas.** Cada una tiene una prueba unitaria con su
+  caso sucio (`tests/test_cleaning.py`), y el generador de datos sinteticos
+  inyecta a proposito un 3 % de registros defectuosos precisamente para que las
+  reglas se ejerciten de forma medible. Sobre esos datos, las mismas siete reglas
+  descartan exactamente lo inyectado:
+
+| Regla | Descartados sobre datos sinteticos |
+|---|---:|
+| Coordenadas nulas | 6 033 |
+| Fuera de rango WGS84 | 6 119 |
+| Relleno (0,0) | 6 074 |
+| Fecha no parseable | 5 981 |
+| Severidad fuera de 1..4 | 6 058 |
+| Duplicados por ID | 3 354 |
+| **Total** | **35 098 de 1 005 000 (retencion 96,51 %)** |
+
+La conclusion honesta es que la limpieza es correcta y esta probada, y que este
+dataset concreto no la necesita. Afirmar lo contrario exigiria inventar descartes
+que no ocurrieron.
 
 **Dos decisiones de carga que importan:**
 
