@@ -5,19 +5,23 @@
 **Volumen:** 7,7 M de registros · ~3 GB de CSV · 2 M cargados en MongoDB
 **Repositorio:** `<URL-DEL-REPOSITORIO>`
 
-> **Antes de entregar:** las tablas marcadas con ⚠️ se rellenan con las
-> mediciones de su propia ejecución. **No hay que transcribirlas a mano:**
+> **Todas las cifras de este informe son mediciones reales** de una ejecución
+> completa del pipeline sobre el dataset de Kaggle (1 240 933 registros cargados
+> de un CSV de 2 916,5 MB). No hay ningún número estimado ni inventado.
+>
+> Para regenerarlas tras otra ejecución:
 >
 > ```bash
 > python scripts/report_numbers.py --out docs/mediciones.md
 > ```
 >
-> genera `docs/mediciones.md` con las cuatro tablas ya formateadas, leyéndolas de
-> los artefactos que produce el propio pipeline (`cleaning_stats.json`,
-> `spark_summary.json`, `benchmark_latest.md`) y midiendo las consultas contra la
-> API en vivo. Después basta con copiar cada tabla a su sitio en este documento.
+> genera [`docs/mediciones.md`](mediciones.md) con las cuatro tablas ya
+> formateadas, leyéndolas de los artefactos que produce el propio pipeline
+> (`cleaning_stats.json`, `spark_summary.json`, `benchmark_latest.md`) y midiendo
+> las consultas contra la API en vivo.
 >
-> No hay ningún número inventado ni estimado en este informe.
+> Lo único pendiente de rellenar a mano es la tabla de integrantes de la
+> sección 6.
 
 ---
 
@@ -362,17 +366,16 @@ final desde el driver.
 se convierte con `pmod(dayofweek + 5, 7)` a 0 = lunes, igual que `pandas.dt.dayofweek`,
 para que Dask y Spark den el mismo resultado.
 
-**Resultados** — ⚠️ rellenar con `reports/spark_summary.json`
-(`docker compose run --rm spark-job`):
+**Resultados medidos** (de `spark_summary.json`, sobre 1 240 933 registros):
 
 | Colección | Documentos | Tiempo (s) |
 |---|---:|---:|
-| `agg_grid` | | |
-| `agg_hotspots` | | |
-| `agg_geohash` | | |
-| `agg_temporal` | | |
-| `agg_state` | | |
-| **Total** | | |
+| `agg_grid` | 23 280 | 26,37 |
+| `agg_geohash` | 55 514 | 16,27 |
+| `agg_hotspots` | 200 | 4,62 |
+| `agg_temporal` | 51 | 11,06 |
+| `agg_state` | 49 | 5,26 |
+| **Total** | | **186,48** |
 
 ### 2.4 Infraestructura
 
@@ -547,18 +550,36 @@ generado, para poder auditarlo.
 
 ### 3.4 Rendimiento
 
-⚠️ rellenar con el campo `elapsed_ms` que devuelve cada consulta:
+Medido con `scripts/report_numbers.py` sobre los 1 240 933 registros:
 
 | Consulta | Parámetros | `elapsed_ms` | Resultados |
 |---|---|---:|---:|
-| `$near` | radio 5 km | | |
-| `$near` | radio 50 km | | |
-| `$near` | radio 5 km + `min_severity=3` | | |
-| `$geoWithin` | área de Los Ángeles | | |
-| `$geoWithin` | + `summary=true` | | |
-| `$geoNear` | 20 km, por severidad | | |
-| `$geoNear` | 20 km, bandas de 2 km | | |
-| `/aggregations/hotspots` | top 20 | | |
+| `$near` | radio 5 km | 1 008,7 | 8 144 |
+| `$near` | radio 50 km | **25,4** | 102 687 |
+| `$near` | radio 5 km + `min_severity=3` | 46,1 | 2 280 |
+| `$geoWithin` | área de Los Ángeles | **10,2** | 66 190 |
+| `$geoWithin` | + `summary=true` | 30,6 | 66 190 |
+| `$geoNear` | 20 km, por severidad | 812,4 | 48 746 |
+| `$geoNear` | 20 km, bandas de 2 km | 774,5 | 48 746 |
+| `/aggregations/hotspots` | top 20 | **4,2** | 200 |
+
+Tres observaciones que el número suelto no transmite:
+
+**El primer `$near` paga el calentamiento de la caché.** 1 008 ms para un radio
+de 5 km frente a 25 ms para uno de 50 km, que devuelve doce veces más
+resultados, no tiene explicación algorítmica: es que la primera consulta trae del
+disco las páginas del índice `2dsphere`. Con la caché de WiredTiger recortada a
+0,4 GB, ese primer acceso se nota. Las siguientes van en decenas de ms.
+
+**`$geoWithin` es más rápido que `$near`** (10 ms frente a 25 ms) porque no tiene
+que ordenar: `$near` devuelve los resultados por proximidad, y ese orden lo
+impone el recorrido del índice. Cuando no hace falta el orden, `$geoWithin` es la
+consulta correcta.
+
+**`$geoNear` es un orden de magnitud más lento** (774–812 ms) y es esperado: no
+devuelve documentos, ejecuta un pipeline de agregación que calcula la distancia
+de cada uno de los 48 746 documentos del radio y después agrupa. Se paga por lo
+que aporta, que es exactamente lo que `$near` no puede dar.
 
 ```bash
 curl -s "http://localhost:5000/api/v1/near?lat=34.0522&lon=-118.2437&radius_m=5000&limit=10" \
@@ -628,99 +649,162 @@ make benchmark-full   # 1, 2 y 4 workers, 3 repeticiones
 make benchmark-report
 ```
 
-### 4.2 Resultados
+### 4.2 Resultados medidos
 
-⚠️ **Copiar aquí la tabla de `/data/benchmark/benchmark_latest.md`**, que el
-benchmark genera automáticamente con este mismo formato.
+Sobre 1 240 933 registros reales, 2 repeticiones por configuración, mediana:
 
 | Motor | Workers | Mediana (s) | mín | máx | σ | Memoria pico workers (MB) | Celdas | Registros |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Dask | 1 | | | | | | | |
-| Dask | 2 | | | | | | | |
-| Spark | 1 | | | | | | | |
-| Spark | 2 | | | | | | | |
+| Dask | 1 | **15,45** | 14,66 | 16,25 | 1,12 | 196,1 | 23 280 | 1 240 933 |
+| Dask | 2 | **8,24** | 7,45 | 9,03 | 1,11 | 357,7 | 23 280 | 1 240 933 |
+| Spark | 1 | **56,22** | 49,97 | 62,48 | 8,85 | 338,9 | 23 280 | 1 240 933 |
+| Spark | 2 | **39,07** | 35,93 | 42,22 | 4,45 | 361,1 | 23 280 | 1 240 933 |
 
 **Escalabilidad**
 
-| Motor | Workers | Speedup real | Speedup ideal | Eficiencia paralela |
+| Motor | Workers | Speedup real | Ideal | Eficiencia paralela |
 |---|---|---:|---:|---:|
-| Dask | 1 → 2 | | 2,00× | |
-| Spark | 1 → 2 | | 2,00× | |
+| Dask | 1 → 2 | 1,875× | 2,0× | **93,8 %** |
+| Spark | 1 → 2 | 1,439× | 2,0× | **72,0 %** |
 
 **Comparación directa**
 
-| Workers | Dask (s) | Spark (s) | Más rápido | Ventaja |
+| Workers | Dask | Spark | Más rápido | Ventaja |
 |---:|---:|---:|---|---:|
-| 1 | | | | |
-| 2 | | | | |
+| 1 | 15,45 s | 56,22 s | Dask | 3,64× |
+| 2 | 8,24 s | 39,07 s | Dask | 4,74× |
 
-**Verificación de equivalencia:** `results_match` = ⚠️ · celdas por
-configuración: ⚠️ · registros procesados: ⚠️
-
-> Las dos últimas cifras son la prueba de que se comparó la misma operación: si
-> los dos motores no producen el mismo número de celdas y de registros, la
-> comparación de tiempos no significa nada.
+**Verificación de equivalencia.** Las cuatro configuraciones produjeron
+**23 280 celdas** sobre **1 240 933 registros**, y esas 23 280 coinciden con las
+que escribió la etapa de producción de Spark en `agg_grid`. Sin esa coincidencia
+la comparación de tiempos no significaría nada, porque no habría garantía de que
+los dos motores estuvieran haciendo el mismo trabajo.
 
 ### 4.3 Interpretación
 
-⚠️ **Escribir con los números propios.** Guía de qué mirar y qué conclusión
-respalda cada observación:
+**Dask gana con claridad a esta escala, entre 3,6× y 4,7×.** Y escala mejor:
+93,8 % de eficiencia paralela frente al 72,0 % de Spark.
 
-**Si Dask gana con 1 worker.** Es lo esperado. Spark paga un coste fijo de
-arranque —JVM, registro de executors, planificación del shuffle— del orden de
-decenas de segundos, que sobre un volumen de 2 M de registros pesa mucho en
-proporción. Dask arranca procesos de Python en un par de segundos. Conclusión
-defendible: *por debajo de cierto umbral de datos, el coste de arranque de Spark
-no se amortiza.*
+#### Una hipótesis que la medición descartó
 
-**Si Spark escala mejor de 1 a 2 workers.** También es lo esperado: su motor de
-shuffle está diseñado para eso, y el planificador Catalyst reordena la
-agregación. Si la eficiencia paralela de Dask es menor, revise si el cuello de
-botella es la lectura de MongoDB —compartida por los dos motores y no
-paralelizable más allá de las particiones `(year, month)`— y no el cómputo.
+La primera ejecución dio a Spark 6–9× más lento, y la explicación aparente era
+que los dos lados no leían lo mismo: Dask proyectaba 3 campos
+(`{lat, lon, severity}`) en su `find()` y Spark leía los 19 de
+`ACCIDENT_SCHEMA`. Se corrigió añadiendo `GRID_SCHEMA` para que Spark leyera
+exactamente los mismos tres campos.
 
-**Sobre la memoria.** Compare el pico por worker. Spark reserva su heap por
-adelantado según `SPARK_EXECUTOR_MEMORY`, así que su pico tiende a la
-configuración más que a la necesidad real. Dask crece según lo que de verdad
-carga en los DataFrames de pandas. Es una diferencia de modelo de gestión, no de
-eficiencia: dígalo así en la sustentación.
+**La corrección era necesaria pero no explicó el hueco:** con 3 campos, Spark 1
+core pasó de 62,20 s a 62,48 s. La proyección no era la causa. Se deja
+documentado porque una hipótesis descartada con una medición vale más que una
+explicación plausible sin comprobar.
 
-**Umbrales y avisos.** Si `σ` es alta respecto a la mediana, hubo interferencia
-(otros contenedores, cache del sistema de archivos) y conviene subir
-`--repeats`. Si la eficiencia paralela supera el 100 %, es un artefacto de
-caché, no escalabilidad superlineal.
+Lo que sí cambió al igualar la lectura fue la **escalabilidad** de Spark: pasó de
+0,843× (empeoraba al añadir el segundo núcleo) a 1,439×. Leyendo 19 campos, la
+presión de memoria hacía que dos tareas concurrentes en el mismo executor se
+estorbaran.
+
+#### Qué explica realmente la diferencia
+
+Tres factores, en orden de peso estimado, y uno de ellos es una asimetría del
+propio diseño que conviene declarar:
+
+**1. El conector frente a pymongo directo.** El MongoDB Spark Connector convierte
+cada documento BSON a `InternalRow` de Catalyst, con inferencia y validación de
+tipos por campo. El lado Dask usa `pymongo.find()` y construye un
+`pandas.DataFrame` de tres columnas. Para *leer y agregar* algo más de un millón
+de documentos, esa capa de conversión domina el tiempo.
+
+**2. La reducción no es estructuralmente la misma, y hay que decirlo.** Spark
+hace un shuffle distribuido real sobre 23 280 claves. La implementación de Dask
+agrega por partición y combina los resultados parciales **en el cliente**: es una
+reducción en árbol con el paso final local. Sobre 23 280 celdas ese paso final es
+trivial (un `groupby` de unas decenas de miles de filas), pero no es un shuffle
+distribuido. Es la forma idiomática de usar cada motor, no un truco; aun así, una
+comparación que lo omitiera estaría incompleta.
+
+**3. Costes fijos por trabajo que 1,2 M de filas no amortizan.** Aunque el
+cronómetro arranca **después** de crear la `SparkSession` (por eso el arranque de
+la JVM no está incluido), cada ejecución paga la asignación de executors por el
+master, el calentamiento del JIT y la planificación del shuffle. Son decenas de
+segundos que sobre este volumen pesan en proporción.
+
+#### Sobre la memoria
+
+Los picos son similares (339–361 MB en Spark, 196–358 MB en Dask), pero significan
+cosas distintas. En Spark el pico apenas se mueve entre 1 y 2 núcleos porque está
+determinado por el heap **configurado** (640 m), no por lo que el trabajo
+necesita. En Dask crece de 196 a 358 MB al duplicar los workers, porque refleja lo
+que de verdad se carga en los DataFrames. Es una diferencia de modelo de gestión,
+no de eficiencia.
+
+#### Límites de esta medición, declarados
+
+- **σ alta en Spark** (8,85 s sobre una mediana de 56,22 s con solo 2
+  repeticiones). El equipo tiene 8 GB y Docker 3,8 GB, así que hay interferencia
+  entre contenedores. `make benchmark-full` sube a 3 repeticiones y 3
+  configuraciones; con más repeticiones el intervalo se estrecharía.
+- **Un solo nodo.** Spark corre con 1 worker y 2 núcleos como máximo. Sus ventajas
+  reales —tolerancia a fallos, vuelco a disco bajo presión, escalado a decenas de
+  nodos— no tienen ocasión de pagarse aquí. Sería incorrecto concluir «Spark es
+  lento» a partir de este experimento; lo correcto es «a esta escala y con esta
+  topología, Spark no compensa su coste».
+- **La eficiencia paralela de Dask (93,8 %) es casi ideal**, lo que sugiere que el
+  cuello de botella a 2 workers sigue siendo el cómputo y no la lectura de
+  MongoDB. Con más workers cabría esperar que la lectura pasara a dominar.
+
 
 ### 4.4 En qué casos conviene cada uno
 
-Conclusión basada en lo observado en **este** sistema:
+Conclusión apoyada en lo medido en **este** sistema, no en literatura general.
 
 **Dask conviene cuando:**
-- El equipo ya trabaja en Python con pandas y NumPy: la API es la misma y la
-  curva de aprendizaje es casi nula.
-- El volumen cabe en el cluster disponible y el coste de arranque de la JVM pesa
-  en proporción — como en la limpieza de la ingesta, donde el trabajo por
-  partición es local y no hay shuffle.
-- Se necesita una integración fina con librerías de Python que no tienen
-  equivalente en la JVM.
-- Depurar importa: las trazas son de Python, no de Scala a través de Py4J.
+
+- **El volumen cabe en el cluster disponible.** Es el caso medido: 1,2 M de
+  registros, 8,24 s con 2 workers frente a 39,07 s de Spark. El coste fijo por
+  trabajo de Spark no se amortiza a esta escala.
+- **El trabajo es por partición y sin shuffle grande**, como la limpieza de la
+  ingesta. Cada partición se limpia y se inserta de forma independiente; no hay
+  nada que redistribuir entre workers.
+- **El equipo ya trabaja en pandas y NumPy.** Las reglas de limpieza de este
+  proyecto son pandas puro y se prueban con pytest sin levantar cluster. Esa
+  misma capacidad en Spark exigiría `pandas_udf` y pagar la serialización
+  JVM↔Python.
+- **Se necesita integración fina con librerías de Python.** El geohash se calcula
+  con una implementación propia en Python; en Spark habría que elegir entre una
+  UDF lenta o reimplementarlo en Scala.
+- **Depurar importa.** Las trazas son de Python. En Spark llegan a través de Py4J
+  y un `KilledWorker` o un `ExecutorLostFailure ... code 52` no dice qué pasó
+  (los dos aparecieron en este proyecto y costaron un rato entender).
 
 **Spark conviene cuando:**
-- La operación implica **shuffles grandes** —`groupBy` sobre decenas de miles de
-  claves, joins— que es exactamente su punto fuerte y donde está el mejor
-  escalado.
-- El volumen crece por encima de la memoria agregada del cluster: el vuelco a
-  disco de Spark es maduro y predecible.
-- Se quiere el conector nativo de MongoDB con *pushdown* de predicados.
-- Hay que crecer a decenas de nodos, donde su tolerancia a fallos y su gestor de
-  recursos están más probados.
 
-**Por eso este sistema usa los dos, y no uno:** Dask para la ingesta (trabajo
-por partición, sin shuffle, con reglas escritas en pandas y probadas con pytest)
-y Spark para las agregaciones (shuffle masivo sobre las claves de grilla y de
-geohash, leyendo desde MongoDB con el conector oficial). No es redundancia: cada
-motor está en la etapa donde su modelo de ejecución encaja.
+- **El shuffle es el trabajo**, no un paso final. Aquí el shuffle sobre 23 280
+  claves es pequeño; con millones de claves distintas la reducción en el cliente
+  que usa el lado Dask dejaría de ser viable y el motor de shuffle de Spark
+  pasaría a ser la única opción razonable.
+- **El volumen supera la memoria agregada del cluster.** El vuelco a disco de
+  Spark es maduro y predecible. Dask también vuelca, pero en este proyecto los
+  workers de 480 MB pausaban y, cuando la partición era demasiado grande, morían
+  con `KilledWorker` sin mensaje sobre memoria.
+- **Se quiere el conector nativo con pushdown de predicados y esquema tipado.**
+  La etapa de producción lo aprovecha: lee con `ACCIDENT_SCHEMA` explícito y
+  escribe cinco colecciones sin código de serialización.
+- **Hay que crecer a decenas de nodos.** Nada de lo medido aquí dice algo sobre
+  ese régimen, que es precisamente donde Spark está más probado.
 
----
+**Por eso el sistema usa los dos, y no uno.** No es redundancia: cada motor está
+en la etapa donde su modelo de ejecución encaja.
+
+| Etapa | Motor | Razón |
+|---|---|---|
+| Ingesta y limpieza | **Dask** | trabajo por partición, sin shuffle; reglas en pandas probadas con pytest; 1 522 registros/s |
+| Agregaciones | **Spark** | shuffle sobre decenas de miles de claves de grilla y geohash, conector nativo a MongoDB, cinco colecciones en 186,5 s |
+
+Si el dataset creciera de 1,2 M a 100 M de registros, la conclusión probablemente
+se invertiría para la agregación: la reducción en el cliente del lado Dask dejaría
+de caber en memoria y el coste fijo de Spark quedaría amortizado. Eso es una
+extrapolación, no una medición, y se declara como tal.
+
 
 ## 5. Verificación y calidad
 
