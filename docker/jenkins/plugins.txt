@@ -20,9 +20,16 @@ plain-credentials
 docker-workflow
 
 # --- Informes de pruebas --------------------------------------------------
+# Solo junit: el Jenkinsfile publica los resultados con el paso `junit` y el
+# resto de artefactos con `archiveArtifacts`.
+#
+# Se han quitado a proposito:
+#   htmlpublisher  no se usa; los informes se archivan como artefactos.
+#   warnings-ng    no se usa, y la version actual arrastra el aviso de
+#                  seguridad SECURITY-3937 (XSS almacenado). Instalar un plugin
+#                  con una vulnerabilidad conocida que ademas no hace falta es
+#                  superficie de ataque gratis.
 junit
-htmlpublisher
-warnings-ng
 
 # --- Utilidades del workspace --------------------------------------------
 ws-cleanup

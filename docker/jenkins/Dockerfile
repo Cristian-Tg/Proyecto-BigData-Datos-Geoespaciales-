@@ -12,7 +12,10 @@
 # para el codigo: todo se copia dentro de las imagenes y los datos viven en un
 # volumen nombrado.
 # ===========================================================================
-FROM jenkins/jenkins:2.492.1-lts-jdk17
+# El catalogo de plugins de Jenkins avanza mas rapido que el core: los plugins
+# publicados hoy exigen >= 2.504.3, y con 2.492.1 la instalacion aborta con
+# VersionCompatibilityException. Se fija la LTS vigente.
+FROM jenkins/jenkins:2.541.3-lts-jdk17
 
 USER root
 

@@ -22,6 +22,15 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends curl ca-certificates procps; \
     rm -rf /var/lib/apt/lists/*
 
+# La imagen oficial de Spark trae `python3` pero NO `python`. Sin este enlace,
+# cualquier `python -m ...` falla con exit 127 ("command not found"), y el
+# mensaje no delata que falte el binario: parece que falte el modulo.
+RUN set -eux; \
+    if ! command -v python >/dev/null 2>&1; then \
+      ln -s "$(command -v python3)" /usr/local/bin/python; \
+    fi; \
+    python --version
+
 COPY docker/spark/download-mongo-jars.sh /usr/local/bin/download-mongo-jars.sh
 RUN chmod +x /usr/local/bin/download-mongo-jars.sh \
  && /usr/local/bin/download-mongo-jars.sh /opt/spark/jars
@@ -32,7 +41,7 @@ COPY requirements/ /tmp/requirements/
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r /tmp/requirements/spark.txt \
  && pip install --no-cache-dir -r /tmp/requirements/ingestion.txt \
- && python -c "import numpy, pandas, dask, distributed, psutil, pymongo; \
+ && python3 -c "import numpy, pandas, dask, distributed, psutil, pymongo; \
 print('numpy', numpy.__version__, '| pandas', pandas.__version__, \
 '| dask', dask.__version__)" \
  && rm -rf /tmp/requirements
@@ -40,7 +49,12 @@ print('numpy', numpy.__version__, '| pandas', pandas.__version__, \
 WORKDIR /app
 COPY src/ /app/src/
 
-ENV PYTHONPATH=/app \
+# PYSPARK_PYTHON debe ser el MISMO interprete en el driver y en los executors:
+# si difieren, Spark aborta con "Python in worker has different version than
+# that in driver".
+ENV PYSPARK_PYTHON=python3 \
+    PYSPARK_DRIVER_PYTHON=python3 \
+    PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     SPARK_HOME=/opt/spark \
     PATH=/opt/spark/bin:/opt/spark/sbin:$PATH \
@@ -48,4 +62,4 @@ ENV PYTHONPATH=/app \
 
 RUN mkdir -p /data/benchmark /tmp/.ivy2 && chmod -R 0777 /data /tmp/.ivy2
 
-CMD ["python", "-m", "src.benchmark.compare_dask_spark"]
+CMD ["python3", "-m", "src.benchmark.compare_dask_spark"]

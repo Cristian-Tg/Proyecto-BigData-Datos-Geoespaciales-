@@ -1,0 +1,206 @@
+# ===========================================================================
+# Perfil de BAJA MEMORIA — para equipos con 8 GB de RAM total
+# (Docker Desktop con ~4 GB asignados).
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.lowmem.yml docker compose up -d
+#   ./scripts/bootstrap.sh --lowmem          # lo aplica y ademas ejecuta los
+#                                            # trabajos por FASES
+#
+# Este archivo es AUTOSUFICIENTE: fija los valores directamente en lugar de
+# depender de variables de .env, para que aplicarlo sea una sola decision y no
+# haya que recordar editar seis variables.
+#
+# ---------------------------------------------------------------------------
+# PRESUPUESTO DE MEMORIA  (Docker con 3,74 GiB ~ 3830 MB utiles)
+# ---------------------------------------------------------------------------
+#   mongo             550 MB   (cache de WiredTiger recortada a 0,25 GB)
+#   api               280 MB
+#   dask-scheduler    300 MB
+#   dask-worker x2    900 MB   (450 MB cada uno)
+#   spark-master      400 MB
+#   spark-worker x1   850 MB
+#                   ─────────
+#   servicios de datos      ~3280 MB   -> caben todos a la vez
+#   + jenkins          800 MB -> ~4080 MB, NO cabe junto a todo lo demas
+#
+# De ahi las dos consecuencias de diseno de este perfil:
+#
+#   1. Spark baja a UN worker. El enunciado exige "un nodo maestro y al menos
+#      un worker" para Spark, y "al menos dos workers" para Dask: Dask conserva
+#      sus dos, Spark se queda en uno. No se incumple ningun requisito.
+#
+#   2. Los trabajos se ejecutan por FASES. bootstrap.sh --lowmem levanta Dask
+#      solo para la ingesta y lo baja, levanta Spark solo para las
+#      agregaciones y lo baja. El pico de memoria nunca suma los dos motores.
+#      El sistema completo sigue levantandose con un comando; lo que cambia es
+#      que los dos motores no son residentes a la vez.
+#
+# Para la sustentacion, con los servicios de datos ya arriba, Jenkins se
+# levanta aparte:  docker compose up -d jenkins
+# ===========================================================================
+
+services:
+
+  # -------------------------------------------------------------------------
+  mongo:
+    command:
+      - mongod
+      - --bind_ip_all
+      # 0,25 GB en lugar de 1 GB. Con 2 M de documentos el indice 2dsphere
+      # cabe de sobra; lo que se pierde es cache de lectura, y eso se nota en
+      # milisegundos por consulta, no en correccion.
+      - --wiredTigerCacheSizeGB
+      - "0.25"
+    deploy:
+      resources:
+        limits:
+          memory: 550M
+
+  # -------------------------------------------------------------------------
+  api:
+    environment:
+      # 2 workers en vez de 4: cada worker de Gunicorn es un proceso de Python
+      # con su propio pool de conexiones a MongoDB.
+      GUNICORN_WORKERS: "2"
+    command: ["gunicorn", "--bind", "0.0.0.0:5000",
+              "--workers", "2", "--threads", "2", "--timeout", "120",
+              "--access-logfile", "-", "--error-logfile", "-",
+              "--capture-output", "--log-level", "info",
+              "src.api.app:app"]
+    deploy:
+      resources:
+        limits:
+          memory: 280M
+
+  # -------------------------------------------------------------------------
+  dask-scheduler:
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+
+  dask-worker:
+    # Se mantienen DOS workers: es un requisito explicito del enunciado.
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 450M
+    command:
+      - dask
+      - worker
+      - tcp://dask-scheduler:8786
+      - --nworkers
+      - "1"
+      # Un hilo por worker: con 450 MB, dos hilos compartiendo ese limite
+      # provocan que el worker se pause por presion de memoria a mitad de
+      # particion, que es peor que ir en serie.
+      - --nthreads
+      - "1"
+      - --memory-limit
+      - "400MB"
+      - --death-timeout
+      - "180"
+
+  # -------------------------------------------------------------------------
+  spark-master:
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+
+  spark-worker:
+    # UN worker. El enunciado pide "al menos un worker" para Spark.
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 850M
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "2"
+      - --memory
+      - "700m"
+      - --webui-port
+      - "8081"
+
+  # -------------------------------------------------------------------------
+  jenkins:
+    environment:
+      # Sin -Xmx, la JVM de Jenkins reclama hasta 1/4 de la RAM visible y en
+      # este presupuesto eso deja sin memoria al resto.
+      JAVA_OPTS: >-
+        -Xmx512m -Xms256m
+        -Djenkins.install.runSetupWizard=true
+        -Dhudson.model.DownloadService.noSignatureCheck=true
+        -Dorg.apache.commons.jelly.tags.fmt.timeZone=America/Bogota
+      COMPOSE_PROJECT_NAME: geobigdata
+    deploy:
+      resources:
+        limits:
+          memory: 800M
+
+  # =========================================================================
+  # Trabajos puntuales
+  # =========================================================================
+
+  ingestion:
+    environment:
+      # 32 MB por particion: con 450 MB por worker, una particion de 64 MB de
+      # CSV se convierte en un DataFrame de pandas de ~250 MB y el worker se
+      # queda sin margen para construir los documentos.
+      DASK_BLOCKSIZE: 32MB
+      # Lotes mas pequenos: 20.000 documentos GeoJSON son ~12 MB de BSON en
+      # memoria antes de enviarlos.
+      BATCH_SIZE: "10000"
+      # El minimo que exige el enunciado. Subirlo es seguro (el limite es el
+      # disco, no la memoria), pero 1 M ya cumple y la ingesta tarda la mitad.
+      SAMPLE_SIZE: "1000000"
+    deploy:
+      resources:
+        limits:
+          memory: 700M
+
+  spark-job:
+    environment:
+      SPARK_EXECUTOR_MEMORY: 700m
+      SPARK_DRIVER_MEMORY: 700m
+    command: ["python3", "-m", "src.processing.spark_aggregations",
+              # 8 particiones de shuffle en vez de 16: con un solo worker de
+              # 2 nucleos, mas particiones solo anaden planificacion.
+              "--shuffle-partitions", "8",
+              "--summary-out", "/data/spark_summary.json"]
+    deploy:
+      resources:
+        limits:
+          memory: 900M
+
+  benchmark:
+    # El benchmark es el caso mas exigente: levanta su propio LocalCluster de
+    # Dask Y un driver de Spark en el mismo contenedor. Se ejecuta con el resto
+    # de los motores APAGADOS (bootstrap.sh --lowmem lo hace asi).
+    environment:
+      SPARK_EXECUTOR_MEMORY: 700m
+      SPARK_DRIVER_MEMORY: 600m
+    command: ["python3", "-m", "src.benchmark.compare_dask_spark",
+              "--dask-workers", "1,2", "--spark-cores", "1,2",
+              "--repeats", "2",
+              # 350 MB por worker de Dask: con 2 workers son 700 MB, que junto
+              # al driver de Spark caben en el limite de 1400 MB.
+              "--memory-limit", "350MB",
+              "--executor-memory", "700m",
+              "--shuffle-partitions", "8",
+              "--out-dir", "/data/benchmark"]
+    deploy:
+      resources:
+        limits:
+          memory: 1400M
+
+  tests:
+    deploy:
+      resources:
+        limits:
+          memory: 400M

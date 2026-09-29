@@ -63,22 +63,66 @@ orquestado con **Docker Compose**.
 |---|---|---|
 | Docker Engine | 24+ | `docker --version` |
 | Docker Compose | v2 (plugin) | `docker compose version` |
-| RAM asignada a Docker | **8 GB** | `docker info --format '{{.MemTotal}}'` |
+| RAM asignada a Docker | **8 GB** recomendado · 4 GB con `--lowmem` | `docker info --format '{{.MemTotal}}'` |
 | Espacio en disco | 20 GB | |
 | Puertos libres | 5000, 7077, 8080, 8088, 8786, 8787, 27017 | |
 
 No hace falta instalar Python, Java, Spark, Dask ni MongoDB en el equipo: todo
 vive en los contenedores.
 
-> **Windows / WSL2.** Docker Desktop reserva por defecto la mitad de la RAM. Si
-> tiene 16 GB o menos, cree `%USERPROFILE%\.wslconfig` con:
+> **Windows / WSL2.** Docker Desktop reserva por defecto la mitad de la RAM.
+> Cree `%USERPROFILE%\.wslconfig` con:
 > ```ini
 > [wsl2]
 > memory=8GB
 > processors=4
+> swap=2GB
 > ```
-> y después `wsl --shutdown`, y reinicie Docker Desktop. Sin esos 8 GB, Spark y
-> Dask compiten por memoria y los workers mueren con `OOMKilled`.
+> y después `wsl --shutdown`, y reinicie Docker Desktop. Compruebe con
+> `docker info --format "{{.MemTotal}}"`.
+
+### Equipos con 8 GB de RAM (o menos de 6 GB para Docker)
+
+El proyecto trae un **perfil de baja memoria** que sí cabe en ~4 GB:
+
+```bash
+./scripts/bootstrap.sh --lowmem
+```
+
+El script lo activa **solo** si detecta menos de 6 GB en Docker, así que en la
+práctica no hay que recordar la opción. Qué cambia:
+
+| | Estándar | Baja memoria |
+|---|---|---|
+| Workers de Dask | 2 × 2 hilos × 2 GB | 2 × 1 hilo × 400 MB |
+| Workers de Spark | 2 × 2 GB | **1** × 700 MB |
+| Caché de WiredTiger | 1 GB | 0,25 GB |
+| Workers de Gunicorn | 4 | 2 |
+| Partición de Dask | 64 MB | 32 MB |
+| `SAMPLE_SIZE` | 2 000 000 | 1 000 000 |
+| Motores | todos residentes | **por fases** |
+| Jenkins | junto al resto | al final, cuando los motores bajaron |
+
+Dos decisiones merecen explicación:
+
+**Spark baja a un worker, Dask conserva dos.** El enunciado exige *«Spark, con
+un nodo maestro y al menos **un** worker»* y *«Dask, con un scheduler y al menos
+**dos** workers»*. El recorte respeta los dos mínimos.
+
+**Los trabajos se ejecutan por fases.** `--lowmem` levanta Dask solo para la
+ingesta y lo baja, levanta Spark solo para las agregaciones y lo baja. El pico
+de memoria nunca suma los dos motores. El sistema sigue levantándose con un
+comando; lo que cambia es que los dos motores no son residentes a la vez.
+
+Para la sustentación, con los servicios de datos ya arriba:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.lowmem.yml up -d jenkins
+```
+
+Si prefiere tenerlo todo residente a la vez, suba Docker a 5 GB y use el perfil
+estándar. Con 8 GB de RAM total eso deja ~3 GB para Windows: funciona, pero hay
+que cerrar el navegador durante las demos.
 
 ---
 

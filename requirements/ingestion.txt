@@ -13,7 +13,11 @@ numpy==1.26.4
 pyarrow==17.0.0         # acelera la serializacion entre workers de Dask
 
 # --- Descarga del dataset --------------------------------------------------
-kaggle>=1.6.17,<2.0
+# Version EXACTA y no un rango: con `kaggle>=1.6.17,<2.0` la imagen de Dask
+# resolvio 1.8.4 y la de benchmark 1.7.4.5 (pip retrocedio por el numpy
+# 1.26.4 que fija spark.txt). Dos imagenes del mismo commit con distinta
+# version de la libreria de descarga es justo lo que el fijado debe evitar.
+kaggle==1.7.4.5
 
 # --- Medicion de memoria en el benchmark -----------------------------------
 psutil==6.1.0

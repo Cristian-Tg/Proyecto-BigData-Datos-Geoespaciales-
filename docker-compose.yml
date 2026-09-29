@@ -363,7 +363,7 @@ services:
         condition: service_healthy
       spark-master:
         condition: service_healthy
-    command: ["python", "-m", "src.processing.spark_aggregations",
+    command: ["python3", "-m", "src.processing.spark_aggregations",
               "--summary-out", "/data/spark_summary.json"]
     networks: [geonet]
     logging: *default-logging
@@ -396,7 +396,7 @@ services:
         condition: service_healthy
       spark-master:
         condition: service_healthy
-    command: ["python", "-m", "src.benchmark.compare_dask_spark",
+    command: ["python3", "-m", "src.benchmark.compare_dask_spark",
               "--dask-workers", "1,2", "--spark-cores", "1,2",
               "--repeats", "2", "--out-dir", "/data/benchmark"]
     networks: [geonet]

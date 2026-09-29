@@ -22,6 +22,15 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends curl ca-certificates procps; \
     rm -rf /var/lib/apt/lists/*
 
+# La imagen oficial de Spark trae `python3` pero NO `python`. Sin este enlace,
+# cualquier `python -m ...` falla con exit 127 ("command not found"), y el
+# mensaje no delata que falte el binario: parece que falte el modulo.
+RUN set -eux; \
+    if ! command -v python >/dev/null 2>&1; then \
+      ln -s "$(command -v python3)" /usr/local/bin/python; \
+    fi; \
+    python --version
+
 # --- Jars del conector -----------------------------------------------------
 COPY docker/spark/download-mongo-jars.sh /usr/local/bin/download-mongo-jars.sh
 RUN chmod +x /usr/local/bin/download-mongo-jars.sh \
@@ -40,7 +49,12 @@ COPY scripts/ /app/scripts/
 
 # PYTHONPATH=/app permite `from src.common import config` tanto en el driver
 # como en los executors, que ejecutan el mismo codigo.
-ENV PYTHONPATH=/app \
+# PYSPARK_PYTHON debe ser el MISMO interprete en el driver y en los executors:
+# si difieren, Spark aborta con "Python in worker has different version than
+# that in driver".
+ENV PYSPARK_PYTHON=python3 \
+    PYSPARK_DRIVER_PYTHON=python3 \
+    PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     SPARK_HOME=/opt/spark \
     PATH=/opt/spark/bin:/opt/spark/sbin:$PATH \

@@ -86,7 +86,7 @@ benchmark:  ## Comparacion Dask vs Spark (1 y 2 workers, 2 repeticiones)
 	$(COMPOSE) run --rm benchmark
 
 benchmark-full:  ## Benchmark mas exhaustivo (1, 2 y 4 workers, 3 repeticiones)
-	$(COMPOSE) run --rm benchmark python -m src.benchmark.compare_dask_spark \
+	$(COMPOSE) run --rm benchmark python3 -m src.benchmark.compare_dask_spark \
 	  --dask-workers 1,2,4 --spark-cores 1,2,4 --repeats 3 \
 	  --out-dir /data/benchmark
 

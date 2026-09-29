@@ -7,6 +7,7 @@
 #   ./scripts/bootstrap.sh --skip-ingest   # solo la infraestructura
 #   ./scripts/bootstrap.sh --benchmark     # anade la comparacion Dask/Spark
 #   ./scripts/bootstrap.sh --fresh         # borra los volumenes y empieza limpio
+#   ./scripts/bootstrap.sh --lowmem        # equipos con 8 GB de RAM total
 #
 # Criterio de evaluacion: "que el sistema completo se levante con un solo
 # comando". Este script es ese comando.
@@ -36,11 +37,19 @@ SKIP_SPARK=0
 RUN_BENCHMARK=0
 FRESH=0
 WITH_JENKINS=1
+LOWMEM=0
+SAMPLE_SIZE_SET=0
+
+# Se usa `-f` explicito y no la variable COMPOSE_FILE porque su separador
+# depende del sistema operativo (":" en Linux, ";" en Windows) y eso rompe el
+# script segun donde se ejecute.
+COMPOSE_ARGS=(-f docker-compose.yml)
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sample)        SAMPLE_SIZE="$2"; shift 2 ;;
-    --sample=*)      SAMPLE_SIZE="${1#*=}"; shift ;;
+    --sample)        SAMPLE_SIZE="$2"; SAMPLE_SIZE_SET=1; shift 2 ;;
+    --sample=*)      SAMPLE_SIZE="${1#*=}"; SAMPLE_SIZE_SET=1; shift ;;
+    --lowmem)        LOWMEM=1; shift ;;
     --skip-ingest)   SKIP_INGEST=1; shift ;;
     --skip-spark)    SKIP_SPARK=1; shift ;;
     --benchmark)     RUN_BENCHMARK=1; shift ;;
@@ -53,6 +62,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+dc() { docker compose "${COMPOSE_ARGS[@]}" "$@"; }
+
 # =========================================================================
 step "1/8  Comprobando requisitos"
 # =========================================================================
@@ -62,12 +73,37 @@ docker info >/dev/null 2>&1 || die "El demonio de Docker no responde. Arranque D
 ok "Docker $(docker version --format '{{.Server.Version}}') y Compose $(docker compose version --short)"
 
 MEM_BYTES=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
-MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
-if [ "$MEM_GB" -lt 7 ]; then
-  warn "Docker solo tiene ${MEM_GB} GB de RAM. Se recomiendan 8 GB o mas."
-  warn "En Windows/WSL2: cree %USERPROFILE%\\.wslconfig con [wsl2] memory=8GB"
+MEM_MB=$(( MEM_BYTES / 1024 / 1024 ))
+ok "Memoria disponible para Docker: ${MEM_MB} MB"
+
+# Con menos de 6 GB el perfil de baja memoria se activa SOLO. Sin el, los
+# workers de Dask y de Spark se matan entre ellos con OOMKilled, y el sintoma
+# que ve el usuario es un timeout sin causa evidente.
+if [ "$MEM_MB" -lt 6000 ] && [ "$LOWMEM" = "0" ]; then
+  warn "Docker tiene ${MEM_MB} MB (menos de 6 GB): se activa el perfil de BAJA MEMORIA."
+  warn "Para forzarlo siempre, use --lowmem."
+  LOWMEM=1
+fi
+
+if [ "$LOWMEM" = "1" ]; then
+  COMPOSE_ARGS+=(-f docker-compose.lowmem.yml)
+  ok "Perfil de BAJA MEMORIA activo"
+  echo "         - Spark con 1 worker  (el enunciado exige al menos 1)"
+  echo "         - Dask con 2 workers  (el enunciado exige al menos 2)"
+  echo "         - los motores se levantan por FASES, nunca los dos a la vez"
+  echo "         - Jenkins se levanta al final, cuando los motores ya bajaron"
+  if [ "$SAMPLE_SIZE_SET" = "0" ]; then
+    SAMPLE_SIZE=1000000
+    echo "         - SAMPLE_SIZE=1000000 (el minimo que exige el enunciado)"
+  fi
+  JENKINS_AL_FINAL=$WITH_JENKINS
+  WITH_JENKINS=0
 else
-  ok "Memoria disponible para Docker: ${MEM_GB} GB"
+  JENKINS_AL_FINAL=0
+  if [ "$MEM_MB" -lt 7000 ]; then
+    warn "Se recomiendan 8 GB para Docker. En Windows cree %USERPROFILE%/.wslconfig"
+    warn "con [wsl2] y memory=8GB, y despues ejecute: wsl --shutdown"
+  fi
 fi
 
 # =========================================================================
@@ -100,7 +136,7 @@ fi
 
 if [ "$FRESH" = "1" ]; then
   step "2b/8  --fresh: eliminando contenedores y volumenes previos"
-  docker compose down -v --remove-orphans || true
+  dc down -v --remove-orphans || true
   ok "Estado anterior eliminado"
 fi
 
@@ -108,7 +144,7 @@ fi
 step "3/8  Construyendo las imagenes"
 # =========================================================================
 # Un build por imagen distinta; los servicios que comparten imagen se saltan.
-docker compose build mongo dask-scheduler spark-master api tests benchmark
+dc build mongo dask-scheduler spark-master api tests benchmark
 ok "Imagenes construidas"
 docker images --filter "reference=geobigdata/*" \
   --format "       {{.Repository}}:{{.Tag}}  {{.Size}}"
@@ -116,16 +152,23 @@ docker images --filter "reference=geobigdata/*" \
 # =========================================================================
 step "4/8  Levantando la infraestructura"
 # =========================================================================
-SERVICES="mongo dask-scheduler dask-worker spark-master spark-worker api"
-[ "$WITH_JENKINS" = "1" ] && SERVICES="$SERVICES jenkins"
-docker compose up -d --remove-orphans $SERVICES
-ok "Servicios iniciados"
+if [ "$LOWMEM" = "1" ]; then
+  # En baja memoria se levanta solo el nucleo persistente. Dask y Spark se
+  # levantan y se bajan en su propia fase, de modo que el pico nunca suma los
+  # dos motores.
+  SERVICES="mongo api"
+else
+  SERVICES="mongo dask-scheduler dask-worker spark-master spark-worker api"
+  [ "$WITH_JENKINS" = "1" ] && SERVICES="$SERVICES jenkins"
+fi
+dc up -d --remove-orphans $SERVICES
+ok "Servicios iniciados: $SERVICES"
 
 wait_for() {
   local svc="$1" limit="${2:-60}" n=0 cid st
   printf "       esperando a %-16s" "$svc"
   while [ "$n" -lt "$limit" ]; do
-    cid="$(docker compose ps -q "$svc" 2>/dev/null | head -1)"
+    cid="$(dc ps -q "$svc" 2>/dev/null | head -1)"
     if [ -n "$cid" ]; then
       st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo unknown)"
       case "$st" in
@@ -136,22 +179,40 @@ wait_for() {
     n=$((n+1)); sleep 3
   done
   printf " TIMEOUT\n"
-  docker compose logs --tail 60 "$svc" || true
+  dc logs --tail 60 "$svc" || true
   return 1
 }
 
-wait_for mongo 60           || die "MongoDB no llego a estar sano"
-wait_for dask-scheduler 40  || die "El scheduler de Dask no arranco"
-wait_for spark-master 40    || die "El master de Spark no arranco"
-wait_for api 60             || die "La API no arranco"
-ok "Todos los servicios responden"
+wait_for mongo 60 || die "MongoDB no llego a estar sano"
+wait_for api 60   || die "La API no arranco"
+if [ "$LOWMEM" = "0" ]; then
+  wait_for dask-scheduler 40 || die "El scheduler de Dask no arranco"
+  wait_for spark-master 40   || die "El master de Spark no arranco"
+fi
+ok "Los servicios levantados responden"
+
+bajar() {
+  printf "       bajando %s para liberar memoria...
+" "$*"
+  dc stop "$@" >/dev/null 2>&1 || true
+  dc rm -f "$@" >/dev/null 2>&1 || true
+}
 
 # =========================================================================
 if [ "$SKIP_INGEST" = "0" ]; then
   step "5/8  Ingesta con Dask  (objetivo: ${SAMPLE_SIZE} registros)"
   warn "Con el dataset completo de Kaggle la descarga son ~1,2 GB: puede tardar."
-  docker compose run --rm -e "SAMPLE_SIZE=${SAMPLE_SIZE}" ingestion
+  if [ "$LOWMEM" = "1" ]; then
+    printf "       levantando Dask (scheduler + 2 workers)...
+"
+    dc up -d dask-scheduler dask-worker
+    wait_for dask-scheduler 60 || die "El scheduler de Dask no arranco"
+  fi
+  dc run --rm -e "SAMPLE_SIZE=${SAMPLE_SIZE}" ingestion
   ok "Datos cargados en MongoDB con indice 2dsphere"
+  if [ "$LOWMEM" = "1" ]; then
+    bajar dask-worker dask-scheduler
+  fi
 else
   step "5/8  Ingesta omitida (--skip-ingest)"
 fi
@@ -159,8 +220,17 @@ fi
 # =========================================================================
 if [ "$SKIP_SPARK" = "0" ]; then
   step "6/8  Agregaciones espaciales y temporales con Spark"
-  docker compose run --rm spark-job
+  if [ "$LOWMEM" = "1" ]; then
+    printf "       levantando Spark (master + 1 worker)...
+"
+    dc up -d spark-master spark-worker
+    wait_for spark-master 60 || die "El master de Spark no arranco"
+  fi
+  dc run --rm spark-job
   ok "Colecciones agregadas creadas"
+  if [ "$LOWMEM" = "1" ]; then
+    bajar spark-worker spark-master
+  fi
 else
   step "6/8  Procesamiento con Spark omitido (--skip-spark)"
 fi
@@ -168,8 +238,20 @@ fi
 # =========================================================================
 if [ "$RUN_BENCHMARK" = "1" ]; then
   step "7/8  Benchmark Dask vs Spark"
-  docker compose run --rm benchmark
+  if [ "$LOWMEM" = "1" ]; then
+    # El benchmark crea su propio LocalCluster de Dask y su propio driver de
+    # Spark dentro del contenedor, asi que necesita el cluster de Spark arriba
+    # pero NO el de Dask.
+    printf "       levantando Spark (master + 1 worker)...
+"
+    dc up -d spark-master spark-worker
+    wait_for spark-master 60 || die "El master de Spark no arranco"
+  fi
+  dc run --rm benchmark
   ok "Benchmark terminado (resultados en el volumen /data/benchmark)"
+  if [ "$LOWMEM" = "1" ]; then
+    bajar spark-worker spark-master
+  fi
 else
   step "7/8  Benchmark omitido (use --benchmark para ejecutarlo)"
 fi
@@ -193,6 +275,15 @@ check "consulta por radio (\$near)" "${BASE}/api/v1/near?lat=34.0522&lon=-118.24
 check "consulta en poligono"       "${BASE}/api/v1/within?min_lon=-118.5&min_lat=33.9&max_lon=-118.1&max_lat=34.1&limit=3"
 check "agregacion \$geoNear"        "${BASE}/api/v1/geonear?lat=34.0522&lon=-118.2437&max_distance_m=20000"
 check "resultados de Spark"        "${BASE}/api/v1/aggregations"
+
+if [ "$JENKINS_AL_FINAL" = "1" ]; then
+  step "8b/8  Levantando Jenkins"
+  # Se deja para el final a proposito: con 4 GB, la JVM de Jenkins no cabe
+  # junto a los dos motores. Ahora que Dask y Spark estan bajados, si cabe.
+  dc up -d jenkins
+  ok "Jenkins iniciado"
+  WITH_JENKINS=1
+fi
 
 printf "\n${B}--- Estado de la base de datos ---${N}\n"
 curl -s "${BASE}/api/v1/stats" || true
