@@ -127,7 +127,13 @@ services:
       replicas: 1
       resources:
         limits:
-          memory: 850M
+          # 1100M, no 850M. El proceso del executor consume heap + OVERHEAD
+          # (off-heap, metaspace, buffers de red), y el overhead por defecto es
+          # max(384 MB, 10% del heap). Con executor.memory=700m el executor
+          # pedia ~1084 MB y el contenedor de 850M llegaba al 99 % (medido:
+          # 847 de 850 MiB) camino de un SIGKILL que ningun log de Spark
+          # habria atribuido a la memoria.
+          memory: 1100M
     command:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
@@ -135,7 +141,7 @@ services:
       - --cores
       - "2"
       - --memory
-      - "700m"
+      - "768m"
       - --webui-port
       - "8081"
 
@@ -179,8 +185,11 @@ services:
 
   spark-job:
     environment:
-      SPARK_EXECUTOR_MEMORY: 700m
-      SPARK_DRIVER_MEMORY: 700m
+      # 512m de heap + 256m de overhead = 768m por executor, que es justo lo
+      # que anuncia el worker y cabe en su limite de 1100M.
+      SPARK_EXECUTOR_MEMORY: 512m
+      SPARK_EXECUTOR_MEMORY_OVERHEAD: 256m
+      SPARK_DRIVER_MEMORY: 512m
     command: ["python3", "-m", "src.processing.spark_aggregations",
               # 8 particiones de shuffle en vez de 16: con un solo worker de
               # 2 nucleos, mas particiones solo anaden planificacion.
@@ -189,22 +198,27 @@ services:
     deploy:
       resources:
         limits:
-          memory: 900M
+          # El driver solo planifica y recoge agregados; medido usa ~340 MB.
+          # 800M deja margen y libera presupuesto para el worker.
+          memory: 800M
 
   benchmark:
     # El benchmark es el caso mas exigente: levanta su propio LocalCluster de
     # Dask Y un driver de Spark en el mismo contenedor. Se ejecuta con el resto
     # de los motores APAGADOS (bootstrap.sh --lowmem lo hace asi).
     environment:
-      SPARK_EXECUTOR_MEMORY: 700m
-      SPARK_DRIVER_MEMORY: 600m
+      # 512m de heap + 256m de overhead: el proceso del executor consume la
+      # suma, no solo el heap.
+      SPARK_EXECUTOR_MEMORY: 512m
+      SPARK_EXECUTOR_MEMORY_OVERHEAD: 256m
+      SPARK_DRIVER_MEMORY: 512m
     command: ["python3", "-m", "src.benchmark.compare_dask_spark",
               "--dask-workers", "1,2", "--spark-cores", "1,2",
               "--repeats", "2",
               # 350 MB por worker de Dask: con 2 workers son 700 MB, que junto
               # al driver de Spark caben en el limite de 1400 MB.
               "--memory-limit", "350MB",
-              "--executor-memory", "700m",
+              "--executor-memory", "512m",
               "--shuffle-partitions", "8",
               "--out-dir", "/data/benchmark"]
     deploy:

@@ -40,6 +40,11 @@ log = setup_logging("processing.spark")
 # Version del conector alineada con Spark 3.5 / Scala 2.12
 MONGO_SPARK_PACKAGE = "org.mongodb.spark:mongo-spark-connector_2.12:10.4.0"
 
+
+def _env(name: str, default: str) -> str:
+    """Variable de entorno con valor por defecto, sin depender de config."""
+    return os.environ.get(name, "").strip() or default
+
 # Esquema explicito. Dejar que el conector lo infiera por muestreo es lento
 # sobre millones de documentos y produce tipos inestables cuando hay nulos.
 ACCIDENT_SCHEMA = StructType([
@@ -92,6 +97,15 @@ def build_spark(app_name: str = "GeoBigData-Aggregations",
         .config("spark.mongodb.read.database", config.mongo.database)
         .config("spark.mongodb.write.database", config.mongo.database)
         .config("spark.executor.memory", executor_memory or config.spark.executor_memory)
+        # memoryOverhead EXPLICITO. Es el error silencioso mas facil de cometer
+        # al limitar la memoria de un contenedor: el proceso del executor no
+        # consume solo `spark.executor.memory` (el heap), sino heap + overhead
+        # (off-heap, metaspace, buffers de red). El defecto es max(384 MB, 10%
+        # del heap), asi que un executor de 700m pide en realidad ~1084 MB, y en
+        # un contenedor limitado a 850M el kernel lo mata sin que ningun log de
+        # Spark mencione la memoria.
+        .config("spark.executor.memoryOverhead",
+                _env("SPARK_EXECUTOR_MEMORY_OVERHEAD", "256m"))
         .config("spark.driver.memory", driver_memory or config.spark.driver_memory)
         # 200 particiones de shuffle (default) es absurdo para un cluster de 2
         # workers: genera miles de tareas diminutas y domina el tiempo total.
