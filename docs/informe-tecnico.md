@@ -388,6 +388,44 @@ Al contrario que `$near`, **`$geoWithin` sí es válido dentro de `$match`**, lo
 permite el resumen del área con un pipeline de agregación: conteo, severidad
 media y máxima, número de graves, ciudades distintas y ventana temporal.
 
+#### Un detalle de geodesia que conviene conocer
+
+MongoDB interpreta los lados de un `Polygon` como **geodésicas** (arcos de
+círculo máximo), **no** como líneas de latitud constante. El lado norte de un
+«rectángulo» lat/lon se comba hacia el polo en su parte central, así que un punto
+ligeramente al norte de `max_lat` **sí está dentro** del polígono esférico.
+
+Se detectó al escribir la prueba de integración, que comprobaba la contención
+con el rectángulo lat/lon y fallaba. Medido con un bbox de 0,6° de ancho a 34° de
+latitud, sobre 1000 puntos devueltos:
+
+| | Resultado |
+|---|---|
+| Puntos fuera del rectángulo lat/lon | 11 de 1000 |
+| Exceso en **latitud** | entre 1,3 m y 17,1 m |
+| Exceso en **longitud** | **0 m en todos** |
+
+El que el exceso aparezca solo en latitud, solo en las longitudes centrales y
+nunca en longitud es la firma exacta del abombamiento: los lados este y oeste son
+meridianos, que son círculos máximos y no se comban.
+
+La conclusión es que **la prueba estaba mal, no la consulta**. Se corrigió con una
+tolerancia documentada de 100 m en latitud, y se añadió una segunda prueba que
+exige contención **exacta** en longitud, de modo que un error de contención real
+seguiría detectándose en lugar de quedar tapado por la tolerancia.
+
+#### El conteo es metadato opcional, y se trata como tal
+
+`count_documents` con `$geoWithin` sobre ~970 000 documentos puede tardar más que
+la consulta principal. Con la caché de WiredTiger recortada a 0,25 GB superaba el
+límite de tiempo y el endpoint devolvía **500 teniendo los resultados válidos ya
+calculados en la mano**.
+
+Ahora el conteo degrada: `total_matching: null` más una marca
+`total_matching_timed_out: true`, para que el cliente distinga «no hay
+resultados» de «no se pudo contar». La caché se subió a 0,4 GB, que era la causa
+real del timeout.
+
 ### 3.3 `$geoNear` — agregación por cercanía
 
 ```python

@@ -123,11 +123,43 @@ else
   ok ".env ya existe (no se sobrescribe)"
 fi
 
-# Credenciales de Kaggle: se avisa, pero no se bloquea
-if grep -q '^KAGGLE_USERNAME=.\+' .env 2>/dev/null; then
-  ok "Credenciales de Kaggle configuradas en .env"
-elif [ -f secrets/kaggle.json ] || [ -f "$HOME/.kaggle/kaggle.json" ]; then
-  ok "kaggle.json encontrado"
+# --- Credenciales de Kaggle ------------------------------------------------
+# Si hay un kaggle.json, sus valores se copian a .env. Hace falta porque el
+# compose principal pasa las credenciales por VARIABLES DE ENTORNO y no monta
+# el archivo: un bind mount de una ruta del repositorio se resolveria en el
+# host cuando Jenkins ejecuta compose (patron DooD) y crearia un directorio
+# vacio en silencio. .env esta en .gitignore, asi que el secreto no se versiona.
+sync_kaggle_creds() {
+  local src="$1"
+  python - "$src" <<'PYEOF' 2>/dev/null || return 1
+import json, pathlib, re, sys
+creds = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+user, key = creds.get("username"), creds.get("key")
+if not (user and key):
+    raise SystemExit(1)
+p = pathlib.Path(".env")
+t = p.read_text(encoding="utf-8")
+t = re.sub(r"(?m)^KAGGLE_USERNAME=.*$", f"KAGGLE_USERNAME={user}", t)
+t = re.sub(r"(?m)^KAGGLE_KEY=.*$", f"KAGGLE_KEY={key}", t)
+p.write_text(t, encoding="utf-8")
+print(user)
+PYEOF
+}
+
+KAGGLE_JSON=""
+for cand in secrets/kaggle.json "$HOME/.kaggle/kaggle.json"; do
+  [ -f "$cand" ] && { KAGGLE_JSON="$cand"; break; }
+done
+
+if [ -n "$KAGGLE_JSON" ]; then
+  if KUSER="$(sync_kaggle_creds "$KAGGLE_JSON")"; then
+    ok "Credenciales de Kaggle de ${KAGGLE_JSON} copiadas a .env (usuario: ${KUSER})"
+  else
+    warn "${KAGGLE_JSON} no contiene 'username' y 'key' validos."
+    warn "Genere una Legacy API Key en https://www.kaggle.com/settings/api"
+  fi
+elif grep -q '^KAGGLE_USERNAME=.\+' .env 2>/dev/null   && grep -q '^KAGGLE_KEY=.\+' .env 2>/dev/null; then
+  ok "Credenciales de Kaggle ya configuradas en .env"
 else
   warn "Sin credenciales de Kaggle: la ingesta generara datos SINTETICOS."
   warn "Para usar el dataset real: coloque su kaggle.json en ./secrets/ o"
@@ -192,8 +224,7 @@ fi
 ok "Los servicios levantados responden"
 
 bajar() {
-  printf "       bajando %s para liberar memoria...
-" "$*"
+  printf "       bajando %s para liberar memoria...\n" "$*"
   dc stop "$@" >/dev/null 2>&1 || true
   dc rm -f "$@" >/dev/null 2>&1 || true
 }
@@ -203,8 +234,7 @@ if [ "$SKIP_INGEST" = "0" ]; then
   step "5/8  Ingesta con Dask  (objetivo: ${SAMPLE_SIZE} registros)"
   warn "Con el dataset completo de Kaggle la descarga son ~1,2 GB: puede tardar."
   if [ "$LOWMEM" = "1" ]; then
-    printf "       levantando Dask (scheduler + 2 workers)...
-"
+    printf "       levantando Dask (scheduler + 2 workers)...\n"
     dc up -d dask-scheduler dask-worker
     wait_for dask-scheduler 60 || die "El scheduler de Dask no arranco"
   fi
@@ -221,8 +251,7 @@ fi
 if [ "$SKIP_SPARK" = "0" ]; then
   step "6/8  Agregaciones espaciales y temporales con Spark"
   if [ "$LOWMEM" = "1" ]; then
-    printf "       levantando Spark (master + 1 worker)...
-"
+    printf "       levantando Spark (master + 1 worker)...\n"
     dc up -d spark-master spark-worker
     wait_for spark-master 60 || die "El master de Spark no arranco"
   fi
@@ -242,8 +271,7 @@ if [ "$RUN_BENCHMARK" = "1" ]; then
     # El benchmark crea su propio LocalCluster de Dask y su propio driver de
     # Spark dentro del contenedor, asi que necesita el cluster de Spark arriba
     # pero NO el de Dask.
-    printf "       levantando Spark (master + 1 worker)...
-"
+    printf "       levantando Spark (master + 1 worker)...\n"
     dc up -d spark-master spark-worker
     wait_for spark-master 60 || die "El master de Spark no arranco"
   fi
