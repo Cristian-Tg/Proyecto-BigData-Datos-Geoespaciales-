@@ -15,6 +15,7 @@ Colecciones que produce:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from typing import Any
@@ -98,10 +99,31 @@ def build_spark(app_name: str = "GeoBigData-Aggregations",
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.driver.host", _driver_host())
-        # Si los jars no estan en la imagen, Ivy los resuelve en tiempo de envio
-        .config("spark.jars.packages", MONGO_SPARK_PACKAGE)
+        # El driver escucha en todas las interfaces y se ANUNCIA con la IP
+        # de arriba. Separar las dos cosas evita el fallo al enlazarse
+        # cuando el nombre anunciado no resuelve dentro del contenedor.
+        .config("spark.driver.bindAddress", "0.0.0.0")
         .config("spark.jars.ivy", "/tmp/.ivy2")
     )
+
+    # Ivy SOLO si se pide explicitamente.
+    #
+    # Los jars del conector estan dentro de la imagen (ver
+    # docker/spark/download-mongo-jars.sh), asi que fijar spark.jars.packages
+    # haria que CADA envio volviera a resolver el arbol de dependencias con
+    # Ivy: 30-60 s de espera y dependencia de la red, justo lo que bakear los
+    # jars pretendia evitar. Si la red falla durante la sustentacion, el
+    # trabajo no arranca.
+    #
+    # SPARK_USE_IVY_PACKAGES=1 lo reactiva, util para probar otra version del
+    # conector sin reconstruir la imagen.
+    if os.environ.get("SPARK_USE_IVY_PACKAGES", "").lower() in {"1", "true", "yes"}:
+        log.warning("SPARK_USE_IVY_PACKAGES activo: se resolvera %s con Ivy "
+                    "(tarda y necesita red)", MONGO_SPARK_PACKAGE)
+        builder = builder.config("spark.jars.packages", MONGO_SPARK_PACKAGE)
+    else:
+        log.info("Conector de MongoDB tomado de los jars de la imagen "
+                 "(sin resolucion de Ivy)")
 
     for key, value in (extra or {}).items():
         builder = builder.config(key, value)
@@ -113,12 +135,21 @@ def build_spark(app_name: str = "GeoBigData-Aggregations",
 
 
 def _driver_host() -> str:
-    """Hostname que los executors usan para devolver resultados al driver.
+    """Direccion con la que el driver se anuncia a los executors.
 
-    Dentro de Docker el driver debe anunciarse con su nombre de servicio, no con
-    127.0.0.1, o los executors no logran conectarse de vuelta.
+    Los executors abren conexiones DE VUELTA al driver, asi que 127.0.0.1 no
+    sirve: no lo alcanzarian.
+
+    Se usa la IP del propio contenedor y no el nombre del servicio de compose.
+    El motivo es que estos trabajos se lanzan con `docker compose run`, que crea
+    un contenedor efimero SIN el alias DNS del servicio: dentro de el el nombre
+    no resuelve y el driver falla al enlazarse con
+    java.nio.channels.UnresolvedAddressException. La IP, en cambio, es
+    alcanzable por los executors en la misma red bridge.
+
+    SPARK_DRIVER_HOST sigue disponible para forzar un valor cuando el driver
+    corre en un servicio de larga vida, que si tiene alias.
     """
-    import os
     import socket
 
     explicit = os.environ.get("SPARK_DRIVER_HOST", "").strip()

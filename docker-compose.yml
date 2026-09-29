@@ -350,9 +350,12 @@ services:
       <<: [*mongo-env, *geo-env]
       PYTHONPATH: /app
       SPARK_MASTER_URL: ${SPARK_MASTER_URL:-spark://spark-master:7077}
-      # Los executors abren conexiones de vuelta al driver: este debe
-      # anunciarse con un nombre resoluble dentro de la red de compose.
-      SPARK_DRIVER_HOST: spark-job
+      # NO se fija SPARK_DRIVER_HOST con el nombre del servicio.
+      # `docker compose run` crea un contenedor efimero que NO recibe el alias
+      # DNS del servicio: dentro de el, `spark-job` no resuelve, y el driver
+      # falla al enlazarse con java.nio.channels.UnresolvedAddressException.
+      # Sin esta variable, build_spark() usa la IP del propio contenedor, que
+      # los executors si alcanzan en la misma red bridge.
       SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-2g}
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -380,7 +383,7 @@ services:
       <<: [*mongo-env, *geo-env]
       PYTHONPATH: /app
       SPARK_MASTER_URL: ${SPARK_MASTER_URL:-spark://spark-master:7077}
-      SPARK_DRIVER_HOST: benchmark
+      # Ver la nota de spark-job: el driver se anuncia con su propia IP.
       SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-2g}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     # El benchmark levanta su propio LocalCluster de Dask con 1 y 2 workers,

@@ -101,11 +101,21 @@ def generate_synthetic_csv(path: str | Path, n_rows: int = 1_000_000,
             severity = rng.choice([1, 2, 3, 4], size=size,
                                   p=[0.02, 0.80, 0.15, 0.03])
 
-            # Ventana temporal 2016-2023 con mas accidentes en hora pico
+            # Ventana temporal 2016-2023 con mas accidentes en hora pico.
             day_offset = rng.integers(0, 365 * 8, size=size)
-            hour_pool = np.array([7, 8, 9, 15, 16, 17, 18, 12, 13, 20, 22, 2])
-            hour_p = np.array([.10, .12, .07, .08, .13, .14, .10, .05, .05,
-                               .07, .05, .04])
+            # Las 24 horas, ponderadas hacia las horas pico. Antes se muestreaba
+            # de un conjunto de 12 horas, y eso hacia que la agregacion temporal
+            # de Spark produjera 12 franjas en lugar de 24: el dataset real de
+            # Kaggle tiene accidentes a todas las horas, y los datos sinteticos
+            # deben tener la misma FORMA o las pruebas que validan el pipeline
+            # con ellos no dicen nada sobre el pipeline real.
+            hour_pool = np.arange(24)
+            hour_p = np.array([
+                .012, .009, .008, .008, .012, .025,  # 00-05 madrugada
+                .048, .085, .078, .050, .040, .042,  # 06-11 pico de manana
+                .045, .048, .052, .070, .085, .082,  # 12-17 pico de tarde
+                .058, .040, .030, .024, .018, .015,  # 18-23 noche
+            ])
             hour_p = hour_p / hour_p.sum()
             hour = rng.choice(hour_pool, size=size, p=hour_p)
             minute = rng.integers(0, 60, size=size)

@@ -5,9 +5,19 @@
 **Volumen:** 7,7 M de registros · ~3 GB de CSV · 2 M cargados en MongoDB
 **Repositorio:** `<URL-DEL-REPOSITORIO>`
 
-> **Antes de entregar:** las tablas marcadas con ⚠️ deben rellenarse con los
-> números de su propia ejecución. Los comandos que los generan están indicados
-> junto a cada tabla. No hay ningún número inventado en este documento.
+> **Antes de entregar:** las tablas marcadas con ⚠️ se rellenan con las
+> mediciones de su propia ejecución. **No hay que transcribirlas a mano:**
+>
+> ```bash
+> python scripts/report_numbers.py --out docs/mediciones.md
+> ```
+>
+> genera `docs/mediciones.md` con las cuatro tablas ya formateadas, leyéndolas de
+> los artefactos que produce el propio pipeline (`cleaning_stats.json`,
+> `spark_summary.json`, `benchmark_latest.md`) y midiendo las consultas contra la
+> API en vivo. Después basta con copiar cada tabla a su sitio en este documento.
+>
+> No hay ningún número inventado ni estimado en este informe.
 
 ---
 
