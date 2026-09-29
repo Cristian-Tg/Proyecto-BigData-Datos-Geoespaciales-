@@ -117,6 +117,43 @@ def tabla_limpieza(stats: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Tabla de agregaciones de Spark
 # ---------------------------------------------------------------------------
+def tabla_cobertura(base: str) -> str:
+    """Cobertura temporal de la muestra, leida de la agregacion de Spark.
+
+    Es la evidencia de que el muestreo por particiones repartidas funciona: con
+    el orden secuencial faltaban cuatro anos completos del dataset.
+    """
+    data = _get(f"{base}/api/v1/aggregations/temporal?dimension=year&limit=30")
+    if not data or not data.get("results"):
+        return ("*Sin datos: ejecute la ingesta y despues "
+                "`docker compose run --rm spark-job`.*")
+
+    filas = sorted(data["results"], key=lambda r: r.get("bucket") or 0)
+    total = sum(r.get("count", 0) for r in filas)
+    out = ["| Año | Registros | % de la muestra |", "|---:|---:|---:|"]
+    for r in filas:
+        n = r.get("count", 0)
+        pct = f"{100.0 * n / total:.1f} %" if total else "—"
+        out.append(f"| {r.get('bucket')} | {_n(n)} | {pct} |")
+
+    anios = [r.get("bucket") for r in filas if r.get("bucket")]
+    if anios:
+        esperados = set(range(min(anios), max(anios) + 1))
+        faltan = sorted(esperados - set(anios))
+        out += [
+            "",
+            f"- **Rango cubierto**: {min(anios)}–{max(anios)} "
+            f"({len(anios)} años)",
+            f"- **Años ausentes en el rango**: "
+            f"{', '.join(map(str, faltan)) if faltan else 'ninguno'}",
+        ]
+        if not faltan:
+            out.append("- La muestra cubre el rango completo sin huecos, que es "
+                       "el efecto buscado del muestreo por particiones "
+                       "repartidas.")
+    return "\n".join(out)
+
+
 def tabla_spark(summary: dict[str, Any]) -> str:
     out = ["| Colección | Documentos | Tiempo (s) |", "|---|---:|---:|"]
     for nombre, info in (summary.get("stages") or {}).items():
@@ -228,6 +265,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         bloques.append(f"*No se encontró `{data / 'spark_summary.json'}`. "
                        "Ejecute `docker compose run --rm spark-job`.*")
+    bloques.append("")
+
+    # --- cobertura de la muestra ------------------------------------------
+    bloques += ["## 2b. Cobertura temporal de la muestra", ""]
+    if args.skip_api:
+        bloques.append("*Omitido (--skip-api).*")
+    else:
+        bloques.append(tabla_cobertura(args.api.rstrip("/")))
     bloques.append("")
 
     # --- consultas --------------------------------------------------------
