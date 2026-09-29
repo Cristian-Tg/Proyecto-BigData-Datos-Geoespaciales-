@@ -15,6 +15,7 @@ from typing import Any
 
 from bson import ObjectId
 from pymongo.database import Database
+from pymongo.errors import ExecutionTimeout
 
 from src.common import config
 from src.common.geo import meters_to_radians, validate_polygon
@@ -47,6 +48,31 @@ def jsonify_doc(doc: Any) -> Any:
             doc = doc.replace(tzinfo=UTC)
         return doc.isoformat()
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Conteos: metadatos opcionales que NUNCA deben tumbar la consulta
+# ---------------------------------------------------------------------------
+def _safe_count(coll, query: dict[str, Any]) -> tuple[int | None, bool]:
+    """Cuenta documentos y devuelve (total, hubo_timeout).
+
+    El total es informativo: el cliente ya tiene los resultados. Un conteo con
+    $geoWithin sobre cientos de miles de documentos puede tardar mas que la
+    consulta principal, y en un equipo con la cache de WiredTiger recortada
+    llega a superar el limite de tiempo.
+
+    Antes esto se propagaba como OperationFailure y el endpoint devolvia un 500
+    con los resultados ya calculados y perfectamente validos en la mano. Ahora
+    se degrada: total = None y la respuesta lo indica, para que el cliente
+    distinga "no hay resultados" de "no se pudo contar".
+    """
+    try:
+        return coll.count_documents(query,
+                                    maxTimeMS=config.mongo.count_timeout_ms), False
+    except ExecutionTimeout:
+        log.warning("El conteo excedio %s ms; se devuelven los resultados sin "
+                    "total_matching", config.mongo.count_timeout_ms)
+        return None, True
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +169,7 @@ def query_near(db: Database, lat: float, lon: float, radius_m: float,
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     total: int | None = None
+    count_timed_out = False
     if with_count:
         # MongoDB NO admite $near dentro de count/aggregate ($match). Para el
         # total se usa $geoWithin + $centerSphere, que delimita exactamente el
@@ -157,7 +184,7 @@ def query_near(db: Database, lat: float, lon: float, radius_m: float,
         }
         if attribute_filter:
             count_query.update(attribute_filter)
-        total = coll.count_documents(count_query, maxTimeMS=15_000)
+        total, count_timed_out = _safe_count(coll, count_query)
 
     return {
         "query": {
@@ -171,6 +198,7 @@ def query_near(db: Database, lat: float, lon: float, radius_m: float,
         },
         "returned": len(results),
         "total_matching": total,
+        "total_matching_timed_out": count_timed_out,
         "elapsed_ms": round(elapsed_ms, 2),
         "results": results,
     }
@@ -204,9 +232,10 @@ def query_within(db: Database, geometry: dict[str, Any], limit: int = 100,
     results = [jsonify_doc(d) for d in cursor]
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
-    total = coll.count_documents(query, maxTimeMS=30_000) if with_count else None
+    total, count_timed_out = _safe_count(coll, query) if with_count else (None, False)
 
     summary: dict[str, Any] | None = None
+    summary_timed_out = False
     if with_summary:
         # $geoWithin SI es valido dentro de un $match de aggregate, al contrario
         # que $near: eso permite calcular estadisticas del area completa.
@@ -232,8 +261,17 @@ def query_within(db: Database, geometry: dict[str, Any], limit: int = 100,
                 "distinct_cities": {"$size": "$cities"},
             }},
         ]
-        docs = list(coll.aggregate(pipeline, maxTimeMS=30_000, allowDiskUse=True))
-        summary = jsonify_doc(docs[0]) if docs else {"count": 0}
+        try:
+            docs = list(coll.aggregate(
+                pipeline, maxTimeMS=config.mongo.count_timeout_ms * 2,
+                allowDiskUse=True))
+            summary = jsonify_doc(docs[0]) if docs else {"count": 0}
+        except ExecutionTimeout:
+            # Igual que el conteo: el resumen es opcional y no debe invalidar
+            # unos resultados que ya estan calculados.
+            log.warning("El resumen del area excedio el limite de tiempo")
+            summary = None
+            summary_timed_out = True
 
     return {
         "query": {
@@ -246,8 +284,10 @@ def query_within(db: Database, geometry: dict[str, Any], limit: int = 100,
         },
         "returned": len(results),
         "total_matching": total,
+        "total_matching_timed_out": count_timed_out,
         "elapsed_ms": round(elapsed_ms, 2),
         "summary": summary,
+        "summary_timed_out": summary_timed_out,
         "results": results,
     }
 
@@ -265,7 +305,11 @@ GEONEAR_GROUPS: dict[str, str] = {
     "weather": "$weather",
     "grid_id": "$grid_id",
     "geohash": "$geohash",
-    "distance_band": "_band",   # se calcula dentro del pipeline
+    # El "$" es imprescindible: sin el, MongoDB agrupa por la CADENA
+    # literal "_band" en lugar de por el valor del campo, y devuelve un
+    # unico grupo con todos los documentos. El campo lo crea la etapa
+    # $addFields de mas abajo.
+    "distance_band": "$_band",
 }
 
 
@@ -430,7 +474,7 @@ def query_aggregation(db: Database, name: str, limit: int = 100, skip: int = 0,
         "filter": jsonify_doc(query),
         "sort": {"field": sort_field, "order": sort_dir},
         "returned": len(results),
-        "total_matching": coll.count_documents(query, maxTimeMS=15_000),
+        "total_matching": _safe_count(coll, query)[0],
         "elapsed_ms": round(elapsed_ms, 2),
         "results": results,
     }

@@ -223,11 +223,42 @@ class TestConsultaWithin:
         assert resultado["query"]["operator"] == "$geoWithin"
         assert resultado["returned"] > 0
 
+    # Tolerancia por la geodesia esferica, NO por imprecision numerica.
+    #
+    # MongoDB interpreta los lados de un Polygon de $geoWithin como GEODESICAS
+    # (arcos de circulo maximo), no como lineas de latitud constante. El lado
+    # norte de un "rectangulo" lat/lon se comba hacia el polo en su parte
+    # central, asi que puntos ligeramente al norte de max_lat SI estan dentro
+    # del poligono esferico.
+    #
+    # Medido con este bbox (0,6 grados de ancho a 34 grados de latitud): 11 de
+    # 1000 puntos exceden max_lat entre 1,3 y 17,1 m, y NINGUNO excede en
+    # longitud, que es justo la firma del abombamiento. 100 m cubre el efecto
+    # con holgura sin dejar pasar un error real de contencion.
+    GEODESIC_TOLERANCE_DEG = 100.0 / 111_320.0
+
     def test_todos_los_puntos_estan_dentro_del_poligono(self, resultado):
         min_lon, min_lat, max_lon, max_lat = self.BBOX
+        tol = self.GEODESIC_TOLERANCE_DEG
         for doc in resultado["results"]:
-            assert min_lon <= doc["lon"] <= max_lon, doc["accident_id"]
-            assert min_lat <= doc["lat"] <= max_lat, doc["accident_id"]
+            assert min_lon - tol <= doc["lon"] <= max_lon + tol,                 f"{doc['accident_id']} fuera en longitud: {doc['lon']}"
+            assert min_lat - tol <= doc["lat"] <= max_lat + tol,                 f"{doc['accident_id']} fuera en latitud: {doc['lat']}"
+
+    def test_el_exceso_es_solo_en_latitud_y_milimetrico(self, resultado):
+        """Verifica que el exceso responde al abombamiento geodesico.
+
+        Si algun dia apareciera un punto claramente fuera, o el exceso se diera
+        en LONGITUD, no seria geodesia: seria un error de contencion real y esta
+        prueba lo distinguiria de la tolerancia legitima.
+        """
+        min_lon, min_lat, max_lon, max_lat = self.BBOX
+        for doc in resultado["results"]:
+            # El lado este y el oeste son meridianos: no se comban, asi que en
+            # longitud la contencion tiene que ser exacta.
+            assert min_lon <= doc["lon"] <= max_lon,                 (f"{doc['accident_id']} excede en longitud; los meridianos no "
+                 "se comban, esto no es geodesia")
+            exceso_m = max(min_lat - doc["lat"], doc["lat"] - max_lat, 0.0) * 111_320
+            assert exceso_m < 100,                 f"{doc['accident_id']} excede la latitud en {exceso_m:.0f} m"
 
     def test_el_resumen_del_area_es_coherente(self, resultado):
         s = resultado["summary"]

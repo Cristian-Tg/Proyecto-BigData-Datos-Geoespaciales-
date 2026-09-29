@@ -364,6 +364,15 @@ class TestAgregacionGeoNear:
         assert "_band" in add["$addFields"]
         assert 2000.0 in add["$addFields"]["_band"]["$multiply"]
 
+        # Y, sobre todo, que el $group referencie el CAMPO y no la cadena.
+        # Sin el "$", MongoDB agrupa por la constante "_band" y devuelve un
+        # unico grupo con todo dentro. La prueba anterior solo comprobaba la
+        # etapa $addFields, asi que el fallo pasaba desapercibido.
+        group = next(s for s in pipeline if "$group" in s)
+        assert group["$group"]["_id"] == "$_band", (
+            "la clave de agrupacion debe empezar por '$' para ser una "
+            "referencia a campo")
+
     def test_group_by_invalido_lanza_error(self):
         db = FakeDB({"accidents": FakeCollection()})
         with pytest.raises(ValueError, match="group_by"):

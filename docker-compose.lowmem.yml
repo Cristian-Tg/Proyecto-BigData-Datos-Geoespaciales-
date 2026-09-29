@@ -46,15 +46,17 @@ services:
     command:
       - mongod
       - --bind_ip_all
-      # 0,25 GB en lugar de 1 GB. Con 2 M de documentos el indice 2dsphere
-      # cabe de sobra; lo que se pierde es cache de lectura, y eso se nota en
-      # milisegundos por consulta, no en correccion.
+      # 0,4 GB en lugar de 1 GB. Se subio desde 0,25 GB porque con esa cache
+      # los conteos con $geoWithin sobre ~970.000 documentos superaban el limite
+      # de tiempo: el indice 2dsphere no cabia y cada conteo iba a disco.
+      # Gracias al arranque por fases hay margen para dedicarselo a MongoDB, que
+      # es el unico servicio residente durante todo el ciclo.
       - --wiredTigerCacheSizeGB
-      - "0.25"
+      - "0.4"
     deploy:
       resources:
         limits:
-          memory: 550M
+          memory: 768M
 
   # -------------------------------------------------------------------------
   api:

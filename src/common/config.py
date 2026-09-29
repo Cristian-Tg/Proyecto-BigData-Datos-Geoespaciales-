@@ -53,6 +53,11 @@ class MongoConfig:
         default_factory=lambda: _env_float("MONGO_CONNECT_DELAY", 2.0))
     select_timeout_ms: int = field(
         default_factory=lambda: _env_int("MONGO_SELECT_TIMEOUT_MS", 5_000))
+    # Tiempo maximo para los conteos y resumenes, que son metadatos OPCIONALES.
+    # Se corta pronto a proposito: mas vale devolver los resultados sin el total
+    # que hacer esperar al cliente. Ver src/api/queries.py.
+    count_timeout_ms: int = field(
+        default_factory=lambda: _env_int("MONGO_COUNT_TIMEOUT_MS", 8_000))
 
     # Colecciones derivadas que produce Spark
     grid_collection: str = "agg_grid"

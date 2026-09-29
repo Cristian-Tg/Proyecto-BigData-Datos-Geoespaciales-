@@ -80,7 +80,13 @@ def client(flask_app):
     return flask_app.test_client()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def api_base_url() -> str:
-    """URL base de la API para las pruebas de integracion."""
+    """URL base de la API para las pruebas de integracion.
+
+    Ambito de SESION, no de funcion: las fixtures de las pruebas de integracion
+    son de ambito module/class y no pueden depender de una de ambito funcion.
+    Con el ambito por defecto, pytest aborta las 52 pruebas con ScopeMismatch
+    antes de ejecutar ninguna, y el fallo parece de configuracion y no de codigo.
+    """
     return os.environ.get("API_BASE_URL", "http://localhost:5000").rstrip("/")
