@@ -232,7 +232,15 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1400M
+          # 1200M. El benchmark ejecuta los motores en SECUENCIA (primero las
+          # configuraciones de Dask, despues las de Spark), asi que el pico es
+          # max(LocalCluster de Dask ~850 MB, driver de Spark ~700 MB) y no la
+          # suma de ambos.
+          #
+          # Presupuesto de esta fase, con la API detenida porque no participa:
+          #   mongo 900 + spark-master 400 + spark-worker 1200 + benchmark 1200
+          #   = 3700 MB de 3830 disponibles
+          memory: 1200M
 
   tests:
     deploy:
