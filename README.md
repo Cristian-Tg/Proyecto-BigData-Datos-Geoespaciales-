@@ -222,8 +222,13 @@ detecta alguno de esos archivos versionado.
 
 ### Token de Kaggle en local
 
-1. Entre a <https://www.kaggle.com/settings/account> → **Create New Token**.
-   Se descarga `kaggle.json`.
+1. Entre a <https://www.kaggle.com/settings/api> y, en la sección
+   **Legacy API Credentials**, pulse **Create Legacy API Key**. Se descarga un
+   `kaggle.json` con `username` y `key`.
+
+   > Los tokens nuevos con prefijo `KGAT_` **no sirven**: la librería instalada
+   > (`kaggle==1.7.4.5`) solo reconoce `KAGGLE_USERNAME` y `KAGGLE_KEY`, no
+   > `KAGGLE_API_TOKEN`. Hace falta la Legacy API Key, que trae el par completo.
 2. Colóquelo en **una** de estas rutas:
 
 ```bash
@@ -701,6 +706,55 @@ docker compose up -d mongo
 ```
 
 ⚠️ Esto borra los datos: habrá que reejecutar la ingesta.
+</details>
+
+<details>
+<summary><b>La ingesta muere sin mensaje, o con <code>exit 137</code></b></summary>
+
+`137` es `128 + 9`: el kernel mató el proceso con SIGKILL, casi siempre por
+memoria. Confirme cuál contenedor fue:
+
+```bash
+docker inspect <contenedor> --format '{{.State.OOMKilled}} {{.State.ExitCode}}'
+```
+
+Si el log se corta justo después de «Descargando…», el problema era la descarga.
+Ya está resuelto: el proyecto descarga en *streaming* por trozos de 1 MiB en vez
+de usar `KaggleApi.dataset_download_file`, que acumula la respuesta completa en
+memoria (medido: 700 MiB de límite alcanzados y SIGKILL, frente a 166 MiB de pico
+con streaming).
+
+Si muere durante la carga, use el perfil de baja memoria o reduzca el tamaño de
+partición:
+
+```bash
+./scripts/bootstrap.sh --lowmem
+# o
+docker compose run --rm -e DASK_BLOCKSIZE=16MB -e BATCH_SIZE=5000 ingestion
+```
+</details>
+
+<details>
+<summary><b><code>container geo-mongo is unhealthy</code> pero MongoDB funciona</b></summary>
+
+Mire el motivo real del fallo de la sonda:
+
+```bash
+docker inspect geo-mongo --format '{{range .State.Health.Log}}{{.ExitCode}} {{.Output}}{{end}}'
+```
+
+Si dice `Health check exceeded timeout`, **no es MongoDB**: es la sonda. Usa
+`mongosh`, que es un proceso de Node.js, y arrancarlo dentro del contenedor bajo
+presión de CPU tarda varios segundos. Además consume ~150 MB **del propio límite
+de memoria del contenedor**.
+
+El proyecto ya usa `timeout: 20s`, `start_period: 40s` y `--norc`. Si aun así
+falla en un equipo muy justo, suba el timeout o el límite de memoria de `mongo`.
+Compruebe que se recuperó con:
+
+```bash
+docker inspect geo-mongo --format '{{.State.Health.Status}} {{.State.Health.FailingStreak}}'
+```
 </details>
 
 <details>
