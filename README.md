@@ -131,8 +131,8 @@ que cerrar el navegador durante las demos.
 ### Un solo comando
 
 ```bash
-git clone <URL-DEL-REPOSITORIO>
-cd Parcial_BigData
+git clone https://github.com/Cristian-Tg/Proyecto-BigData-Datos-Geoespaciales-.git
+cd Proyecto-BigData-Datos-Geoespaciales-
 
 # Linux / macOS / Git Bash
 ./scripts/bootstrap.sh
