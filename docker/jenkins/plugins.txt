@@ -1,0 +1,34 @@
+# Plugins imprescindibles para el pipeline de este proyecto.
+# Sin version fija: jenkins-plugin-cli resuelve la compatible con el core.
+
+# --- Pipeline declarativo -------------------------------------------------
+workflow-aggregator
+pipeline-stage-view
+pipeline-utility-steps
+
+# --- Git y GitHub (checkout + webhook) ------------------------------------
+git
+github
+github-branch-source
+
+# --- Credenciales: el token de Kaggle se inyecta desde aqui ---------------
+credentials
+credentials-binding
+plain-credentials
+
+# --- Docker ---------------------------------------------------------------
+docker-workflow
+
+# --- Informes de pruebas --------------------------------------------------
+junit
+htmlpublisher
+warnings-ng
+
+# --- Utilidades del workspace --------------------------------------------
+ws-cleanup
+timestamper
+ansicolor
+build-timeout
+
+# --- Configuration as Code (opcional, para reproducir la instancia) ------
+configuration-as-code

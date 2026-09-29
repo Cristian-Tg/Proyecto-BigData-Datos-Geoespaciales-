@@ -1,0 +1,75 @@
+# ===========================================================================
+# Sobrecarga OPCIONAL para desarrollo local.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Que aporta:
+#   * monta ./src dentro de los contenedores, para no reconstruir la imagen en
+#     cada cambio de codigo;
+#   * arranca la API con el servidor de desarrollo de Flask y recarga automatica;
+#   * monta ./secrets/kaggle.json como secreto de solo lectura.
+#
+# IMPORTANTE: este archivo NO lo usa Jenkins. Jenkins ejecuta `docker compose`
+# contra el demonio del host (patron DooD), donde las rutas relativas del
+# workspace no existen y los bind mounts crearian directorios vacios en
+# silencio. Por eso el compose principal no tiene ningun bind mount de codigo.
+# ===========================================================================
+
+services:
+
+  api:
+    volumes:
+      - ./src:/app/src:ro
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+      LOG_LEVEL: DEBUG
+    # El servidor de desarrollo recarga al detectar cambios; Gunicorn no.
+    command: ["python", "-m", "flask", "--app", "src.api.app:app", "run",
+              "--host", "0.0.0.0", "--port", "5000", "--reload"]
+
+  dask-scheduler:
+    volumes:
+      - data_vol:/data
+      - ./src:/app/src:ro
+
+  dask-worker:
+    volumes:
+      - data_vol:/data
+      - ./src:/app/src:ro
+
+  spark-master:
+    volumes:
+      - data_vol:/data
+      - spark_logs:/opt/spark/logs
+      - ./src:/app/src:ro
+
+  spark-worker:
+    volumes:
+      - data_vol:/data
+      - spark_logs:/opt/spark/logs
+      - ./src:/app/src:ro
+
+  ingestion:
+    volumes:
+      - data_vol:/data
+      - ./src:/app/src:ro
+      # Token de Kaggle como secreto de solo lectura. La carpeta ./secrets
+      # esta en .gitignore.
+      - ./secrets/kaggle.json:/run/secrets/kaggle.json:ro
+
+  spark-job:
+    volumes:
+      - data_vol:/data
+      - ./src:/app/src:ro
+
+  benchmark:
+    volumes:
+      - data_vol:/data
+      - ./src:/app/src:ro
+
+  tests:
+    volumes:
+      - test_reports:/reports
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro

@@ -1,0 +1,437 @@
+# ===========================================================================
+# Orquestacion completa del sistema de datos geoespaciales.
+#
+#   docker compose up -d --build        levanta toda la infraestructura
+#   docker compose run --rm ingestion   descarga + limpia + carga (Dask)
+#   docker compose run --rm spark-job   agregaciones espaciales (Spark)
+#   docker compose run --rm benchmark   comparacion Dask vs Spark
+#
+# O, en un solo paso:  make all   /   ./scripts/bootstrap.sh
+#
+# DECISION DE DISENO: no hay NINGUN bind mount de codigo fuente. Todo el codigo
+# se copia dentro de las imagenes y los datos viven en un volumen nombrado.
+# El motivo es Jenkins: ejecuta `docker compose` contra el demonio del host
+# (patron DooD), asi que una ruta relativa del workspace de Jenkins no
+# existiria en el host y el mount crearia un directorio vacio en silencio.
+# Para desarrollo con recarga en caliente existe docker-compose.dev.yml.
+# ===========================================================================
+name: geobigdata
+
+# ---------------------------------------------------------------------------
+# Bloques reutilizables
+# ---------------------------------------------------------------------------
+x-mongo-env: &mongo-env
+  MONGO_URI: ${MONGO_URI:-mongodb://geoadmin:changeme@mongo:27017/geobigdata?authSource=admin}
+  MONGO_DB: ${MONGO_DB:-geobigdata}
+  MONGO_COLLECTION: ${MONGO_COLLECTION:-accidents}
+
+x-geo-env: &geo-env
+  GRID_CELL_DEG: ${GRID_CELL_DEG:-0.1}
+  GEOHASH_PRECISION: ${GEOHASH_PRECISION:-5}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+
+services:
+
+  # =========================================================================
+  # 1. MongoDB  —  almacenamiento GeoJSON con indice 2dsphere
+  # =========================================================================
+  mongo:
+    build:
+      context: .
+      dockerfile: docker/mongo/Dockerfile
+    image: geobigdata/mongo:latest
+    container_name: geo-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-geoadmin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Defina MONGO_ROOT_PASSWORD en .env}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-geobigdata}
+      MONGO_DB: ${MONGO_DB:-geobigdata}
+      MONGO_COLLECTION: ${MONGO_COLLECTION:-accidents}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    # wiredTigerCacheSizeGB acotado: por defecto Mongo reclama el 50% de la RAM
+    # del host y en un portatil deja sin memoria a Spark y a Dask.
+    command:
+      - mongod
+      - --bind_ip_all
+      - --wiredTigerCacheSizeGB
+      - "1"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [geonet]
+    logging: *default-logging
+
+  # Interfaz web opcional para inspeccionar las colecciones.
+  # Solo se levanta con:  docker compose --profile tools up -d mongo-express
+  mongo-express:
+    image: mongo-express:1.0.2-20-alpine3.19
+    container_name: geo-mongo-express
+    profiles: [tools]
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_URL: ${MONGO_URI}
+      ME_CONFIG_BASICAUTH: "false"
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: "true"
+    ports:
+      - "${MONGO_EXPRESS_PORT:-8081}:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks: [geonet]
+    logging: *default-logging
+
+  # =========================================================================
+  # 2. Dask  —  scheduler + 2 workers (requisito: >= 2 workers)
+  # =========================================================================
+  dask-scheduler:
+    build:
+      context: .
+      dockerfile: docker/ingestion/Dockerfile
+    image: geobigdata/dask:latest
+    container_name: geo-dask-scheduler
+    restart: unless-stopped
+    command: ["dask", "scheduler", "--host", "0.0.0.0", "--port", "8786",
+              "--dashboard-address", ":8787"]
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+    ports:
+      - "8786:8786"                                  # protocolo del scheduler
+      - "${DASK_DASHBOARD_PORT:-8787}:8787"          # panel de control
+    volumes:
+      - data_vol:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [geonet]
+    logging: *default-logging
+
+  dask-worker:
+    build:
+      context: .
+      dockerfile: docker/ingestion/Dockerfile
+    image: geobigdata/dask:latest
+    restart: unless-stopped
+    # Sin container_name: `deploy.replicas` exige nombres generados
+    deploy:
+      replicas: ${DASK_N_WORKERS:-2}
+      resources:
+        limits:
+          memory: ${DASK_WORKER_MEMORY_LIMIT:-2560M}
+    command:
+      - dask
+      - worker
+      - tcp://dask-scheduler:8786
+      - --nworkers
+      - "1"
+      - --nthreads
+      - "${DASK_THREADS_PER_WORKER:-2}"
+      - --memory-limit
+      - "${DASK_WORKER_MEMORY:-2g}"
+      - --death-timeout
+      - "120"
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+    volumes:
+      - data_vol:/data
+    depends_on:
+      dask-scheduler:
+        condition: service_healthy
+    networks: [geonet]
+    logging: *default-logging
+
+  # =========================================================================
+  # 3. Spark  —  1 master + 2 workers, con el MongoDB Spark Connector
+  # =========================================================================
+  spark-master:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    image: geobigdata/spark:latest
+    container_name: geo-spark-master
+    restart: unless-stopped
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
+    environment:
+      <<: [*mongo-env, *geo-env]
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_MASTER_URL: spark://spark-master:7077
+      PYTHONPATH: /app
+    ports:
+      - "${SPARK_MASTER_UI_PORT:-8080}:8080"   # interfaz web del master
+      - "7077:7077"                            # puerto de envio de trabajos
+    volumes:
+      - data_vol:/data
+      - spark_logs:/opt/spark/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [geonet]
+    logging: *default-logging
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    image: geobigdata/spark:latest
+    restart: unless-stopped
+    deploy:
+      replicas: ${SPARK_N_WORKERS:-2}
+      resources:
+        limits:
+          memory: ${SPARK_WORKER_MEMORY_LIMIT:-3G}
+    command:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "${SPARK_WORKER_CORES:-2}"
+      - --memory
+      - "${SPARK_WORKER_MEMORY:-2g}"
+      - --webui-port
+      - "8081"
+    environment:
+      <<: [*mongo-env, *geo-env]
+      SPARK_NO_DAEMONIZE: "true"
+      PYTHONPATH: /app
+    volumes:
+      - data_vol:/data
+      - spark_logs:/opt/spark/logs
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks: [geonet]
+    logging: *default-logging
+
+  # =========================================================================
+  # 4. API Flask
+  # =========================================================================
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    image: geobigdata/api:latest
+    container_name: geo-api
+    restart: unless-stopped
+    environment:
+      <<: [*mongo-env, *geo-env]
+      API_HOST: 0.0.0.0
+      API_PORT: "5000"
+      API_DEFAULT_LIMIT: ${API_DEFAULT_LIMIT:-100}
+      API_MAX_LIMIT: ${API_MAX_LIMIT:-1000}
+      API_ENSURE_INDEXES: "1"
+      FLASK_ENV: ${FLASK_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${API_PORT:-5000}:5000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
+    networks: [geonet]
+    logging: *default-logging
+
+  # =========================================================================
+  # 5. Jenkins  —  integracion y despliegue continuo
+  # =========================================================================
+  jenkins:
+    build:
+      context: .
+      dockerfile: docker/jenkins/Dockerfile
+    image: geobigdata/jenkins:latest
+    container_name: geo-jenkins
+    restart: unless-stopped
+    user: root
+    environment:
+      JENKINS_OPTS: --httpPort=8080
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=true
+        -Dhudson.model.DownloadService.noSignatureCheck=true
+        -Dorg.apache.commons.jelly.tags.fmt.timeZone=America/Bogota
+      # Nombre del proyecto de compose que gestionara el pipeline
+      COMPOSE_PROJECT_NAME: geobigdata
+    ports:
+      - "${JENKINS_PORT:-8088}:8080"
+      - "50000:50000"                        # puerto de agentes JNLP
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      # Socket del demonio del host: Jenkins actua como CLIENTE de Docker.
+      # Es el unico bind mount del proyecto y apunta a una ruta que si existe
+      # en el host, de modo que es compatible con el patron DooD.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [geonet]
+    logging: *default-logging
+
+  # =========================================================================
+  # TRABAJOS PUNTUALES (perfil `jobs`: no arrancan con `compose up`)
+  # =========================================================================
+
+  # --- Ingesta: Kaggle -> limpieza con Dask -> MongoDB ---------------------
+  ingestion:
+    build:
+      context: .
+      dockerfile: docker/ingestion/Dockerfile
+    image: geobigdata/dask:latest
+    container_name: geo-ingestion
+    profiles: [jobs]
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+      DASK_SCHEDULER: ${DASK_SCHEDULER:-tcp://dask-scheduler:8786}
+      DATA_DIR: /data
+      # Credenciales de Kaggle POR VARIABLE DE ENTORNO. En local salen de .env
+      # (que esta en .gitignore); en Jenkins, del plugin Credentials.
+      # Nunca se escriben en el repositorio.
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
+      KAGGLE_DATASET: ${KAGGLE_DATASET:-sobhanmoosavi/us-accidents}
+      KAGGLE_FILE: ${KAGGLE_FILE:-US_Accidents_March23.csv}
+      ALLOW_SYNTHETIC_FALLBACK: ${ALLOW_SYNTHETIC_FALLBACK:-1}
+      SAMPLE_SIZE: ${SAMPLE_SIZE:-2000000}
+      BATCH_SIZE: ${BATCH_SIZE:-20000}
+      DASK_BLOCKSIZE: ${DASK_BLOCKSIZE:-64MB}
+      FORCE_DOWNLOAD: ${FORCE_DOWNLOAD:-0}
+      DROP_EXISTING: ${DROP_EXISTING:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - data_vol:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+      dask-scheduler:
+        condition: service_healthy
+    command: ["python", "-m", "src.ingestion.clean_load",
+              "--stats-out", "/data/cleaning_stats.json"]
+    networks: [geonet]
+    logging: *default-logging
+
+  # --- Procesamiento distribuido con Spark ---------------------------------
+  spark-job:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    image: geobigdata/spark:latest
+    container_name: geo-spark-job
+    profiles: [jobs]
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+      SPARK_MASTER_URL: ${SPARK_MASTER_URL:-spark://spark-master:7077}
+      # Los executors abren conexiones de vuelta al driver: este debe
+      # anunciarse con un nombre resoluble dentro de la red de compose.
+      SPARK_DRIVER_HOST: spark-job
+      SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-2g}
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - data_vol:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+    command: ["python", "-m", "src.processing.spark_aggregations",
+              "--summary-out", "/data/spark_summary.json"]
+    networks: [geonet]
+    logging: *default-logging
+
+  # --- Benchmark Dask vs Spark --------------------------------------------
+  benchmark:
+    build:
+      context: .
+      dockerfile: docker/benchmark/Dockerfile
+    image: geobigdata/benchmark:latest
+    container_name: geo-benchmark
+    profiles: [jobs]
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+      SPARK_MASTER_URL: ${SPARK_MASTER_URL:-spark://spark-master:7077}
+      SPARK_DRIVER_HOST: benchmark
+      SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY:-2g}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # El benchmark levanta su propio LocalCluster de Dask con 1 y 2 workers,
+    # asi que necesita memoria para ambos motores a la vez.
+    deploy:
+      resources:
+        limits:
+          memory: ${BENCHMARK_MEMORY_LIMIT:-4G}
+    volumes:
+      - data_vol:/data
+    depends_on:
+      mongo:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+    command: ["python", "-m", "src.benchmark.compare_dask_spark",
+              "--dask-workers", "1,2", "--spark-cores", "1,2",
+              "--repeats", "2", "--out-dir", "/data/benchmark"]
+    networks: [geonet]
+    logging: *default-logging
+
+  # --- Pruebas unitarias (las ejecuta Jenkins antes de construir) ----------
+  tests:
+    build:
+      context: .
+      dockerfile: docker/tests/Dockerfile
+    image: geobigdata/tests:latest
+    container_name: geo-tests
+    profiles: [jobs, ci]
+    environment:
+      <<: [*mongo-env, *geo-env]
+      PYTHONPATH: /app
+      API_BASE_URL: ${API_BASE_URL:-http://api:5000}
+    volumes:
+      - test_reports:/reports
+    networks: [geonet]
+    command: ["pytest", "-m", "not integration", "-v",
+              "--junitxml=/reports/junit-unit.xml"]
+    logging: *default-logging
+
+
+# ---------------------------------------------------------------------------
+networks:
+  geonet:
+    driver: bridge
+    name: geobigdata_geonet
+
+volumes:
+  mongo_data:      # datos de MongoDB
+  mongo_config:    # configuracion del cluster de Mongo
+  data_vol:        # CSV descargado, estadisticas y resultados del benchmark
+  jenkins_home:    # estado de Jenkins (jobs, credenciales, historial)
+  spark_logs:      # logs de eventos de Spark
+  test_reports:    # informes JUnit que recoge Jenkins
