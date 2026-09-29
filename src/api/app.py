@@ -32,6 +32,31 @@ log = setup_logging("api")
 START_TIME = time.time()
 API_PREFIX = "/api/v1"
 
+# ---------------------------------------------------------------------------
+# Presupuesto de espera al conectar a MongoDB
+# ---------------------------------------------------------------------------
+# La API falla RAPIDO a proposito. El valor por defecto de `get_client` (30
+# reintentos) es el correcto para un trabajo por lotes que espera a que Mongo
+# arranque, pero seria nefasto aqui: con la base caida, cada peticion se
+# colgaria minutos reintentando y agotaria los workers de Gunicorn en lugar de
+# devolver un 503 inmediato.
+API_DB_RETRIES = int(os.environ.get("API_MONGO_RETRIES", "2"))
+API_DB_DELAY = float(os.environ.get("API_MONGO_DELAY", "1"))
+API_DB_TIMEOUT_MS = int(os.environ.get("API_MONGO_TIMEOUT_MS", "3000"))
+
+# En el arranque si se puede esperar algo mas: `depends_on: service_healthy` ya
+# garantiza que Mongo responde, pero la creacion del usuario puede ir un paso
+# por detras del healthcheck. Se acota a 5 (~35 s) para no agotar la paciencia
+# de Gunicorn esperando a que arranque el worker; si falla, la API arranca igual
+# y el primer /health lo reporta como degradado.
+STARTUP_DB_RETRIES = int(os.environ.get("API_MONGO_STARTUP_RETRIES", "5"))
+
+
+def _db():
+    """Base de datos con el presupuesto corto de la API."""
+    return get_db(retries=API_DB_RETRIES, delay=API_DB_DELAY,
+                  timeout_ms=API_DB_TIMEOUT_MS)
+
 
 # ---------------------------------------------------------------------------
 # Validacion de parametros
@@ -156,7 +181,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
         # Se hace en el arranque y no en la primera peticion: si el modelo de
         # datos esta mal, es mejor descubrirlo al levantar el contenedor.
         try:
-            ensure_indexes()
+            ensure_indexes(get_db(retries=STARTUP_DB_RETRIES, delay=2.0))
             log.info("Indices verificados en el arranque de la API")
         except Exception as exc:  # noqa: BLE001 - la API debe arrancar igual
             log.error("No fue posible verificar los indices: %s", exc)
@@ -228,7 +253,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
             "timestamp": datetime.now(UTC).isoformat(),
         }
         try:
-            db = get_db()
+            db = _db()
             db.client.admin.command("ping")
             payload["mongodb"] = "ok"
             payload["database"] = db.name
@@ -241,7 +266,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
     @app.get(f"{API_PREFIX}/stats")
     def stats():
         """Conteos por coleccion y estado del indice 2dsphere."""
-        db = get_db()
+        db = _db()
         payload = collection_stats(db)
         payload["config"] = {
             "grid_cell_deg": config.geo.grid_cell_deg,
@@ -326,7 +351,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
             radius_m = radius_km * 1000.0
 
         result = queries.query_near(
-            get_db(),
+            _db(),
             lat=lat, lon=lon, radius_m=radius_m,
             limit=_limit_param(),
             skip=int(_int_param("skip", default=0, minimum=0)),
@@ -371,7 +396,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
             raise BadParam("Falta 'geometry' (GeoJSON Polygon/MultiPolygon) o 'bbox'")
 
         result = queries.query_within(
-            get_db(),
+            _db(),
             geometry=geometry,
             limit=_limit_param(body),
             skip=int(_int_param("skip", default=0, minimum=0, source=body)),
@@ -395,7 +420,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
                            "min_lat<max_lat")
 
         result = queries.query_within(
-            get_db(),
+            _db(),
             geometry=bbox_to_polygon(min_lon, min_lat, max_lon, max_lat),
             limit=_limit_param(),
             skip=int(_int_param("skip", default=0, minimum=0)),
@@ -417,7 +442,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
                                           maximum=2_000_000)
 
         result = queries.aggregate_geo_near(
-            get_db(),
+            _db(),
             lat=_float_param("lat", minimum=-90, maximum=90),
             lon=_float_param("lon", minimum=-180, maximum=180),
             max_distance_m=max_distance_m,
@@ -436,7 +461,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
     # =======================================================================
     @app.get(f"{API_PREFIX}/aggregations")
     def aggregations_index():
-        db = get_db()
+        db = _db()
         names = set(db.list_collection_names())
         available = []
         for alias, (coll, _sort, _dir) in queries.AGGREGATION_COLLECTIONS.items():
@@ -469,7 +494,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
                 raise BadParam("'bbox' debe contener cuatro numeros") from None
 
         result = queries.query_aggregation(
-            get_db(), name=name,
+            _db(), name=name,
             limit=_limit_param(),
             skip=int(_int_param("skip", default=0, minimum=0)),
             dimension=request.args.get("dimension") or None,
@@ -485,7 +510,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
     # =======================================================================
     @app.get(f"{API_PREFIX}/benchmark")
     def benchmark():
-        db = get_db()
+        db = _db()
         coll = db[config.mongo.benchmark_collection]
         runs = [queries.jsonify_doc(d) for d in
                 coll.find({}, {"_id": 0}).sort("started_at", -1).limit(100)]
@@ -502,7 +527,7 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
     @app.post(f"{API_PREFIX}/admin/reindex")
     def reindex():
         """Reconstruye los indices. Util tras cargar datos por otra via."""
-        created = ensure_indexes(get_db())
+        created = ensure_indexes(_db())
         return jsonify({
             "status": "ok",
             "indexes": {k: [str(i) for i in v] for k, v in created.items()},

@@ -339,6 +339,42 @@ class TestSalud:
         assert res.status_code == 503
         assert res.get_json()["status"] == "degraded"
 
+    def test_la_api_falla_rapido_si_mongodb_esta_caido(self):
+        """La API NO debe heredar el presupuesto de espera de los trabajos por lotes.
+
+        `get_client` reintenta 30 veces por defecto, que es lo correcto para la
+        ingesta (esperar a que Mongo arranque en `compose up`). En la API seria
+        nefasto: con la base caida, cada peticion se colgaria minutos y agotaria
+        los workers de Gunicorn en vez de devolver un 503.
+
+        Esta prueba fija el limite superior para que nadie lo suba por error.
+        """
+        from src.api import app as app_module
+
+        presupuesto_s = app_module.API_DB_RETRIES * (
+            app_module.API_DB_TIMEOUT_MS / 1000 + app_module.API_DB_DELAY)
+        assert presupuesto_s <= 15, (
+            f"una peticion podria tardar {presupuesto_s:.0f}s en fallar; "
+            "baje API_DB_RETRIES o API_DB_TIMEOUT_MS")
+        assert app_module.API_DB_RETRIES < 30, (
+            "la API no debe usar el presupuesto de los trabajos por lotes")
+
+    def test_las_rutas_usan_el_presupuesto_corto(self, monkeypatch):
+        """Verifica que las rutas pasan por `_db()` y no por `get_db()` directo."""
+        from src.api import app as app_module
+
+        recibido = {}
+
+        def _spy(uri=None, **kwargs):
+            recibido.update(kwargs)
+            raise RuntimeError("cortocircuito a proposito")
+
+        monkeypatch.setattr(app_module, "get_db", _spy)
+        app_module.create_app(ensure_idx=False).test_client().get(f"{API}/health")
+
+        assert recibido.get("retries") == app_module.API_DB_RETRIES
+        assert recibido.get("timeout_ms") == app_module.API_DB_TIMEOUT_MS
+
     def test_falta_de_indice_2dsphere_devuelve_503(self, client, stub_db, monkeypatch):
         from pymongo.errors import OperationFailure
 

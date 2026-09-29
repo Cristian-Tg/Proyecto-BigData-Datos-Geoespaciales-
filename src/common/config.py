@@ -44,6 +44,16 @@ class MongoConfig:
     database: str = field(default_factory=lambda: _env("MONGO_DB", "geobigdata"))
     collection: str = field(default_factory=lambda: _env("MONGO_COLLECTION", "accidents"))
 
+    # Presupuesto de espera al conectar. Los valores por defecto son los de un
+    # trabajo por lotes, que puede permitirse esperar a que Mongo arranque.
+    # La API los baja a proposito (ver src/api/app.py).
+    connect_retries: int = field(
+        default_factory=lambda: _env_int("MONGO_CONNECT_RETRIES", 30))
+    connect_delay: float = field(
+        default_factory=lambda: _env_float("MONGO_CONNECT_DELAY", 2.0))
+    select_timeout_ms: int = field(
+        default_factory=lambda: _env_int("MONGO_SELECT_TIMEOUT_MS", 5_000))
+
     # Colecciones derivadas que produce Spark
     grid_collection: str = "agg_grid"
     geohash_collection: str = "agg_geohash"

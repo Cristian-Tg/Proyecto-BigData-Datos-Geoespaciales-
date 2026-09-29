@@ -20,16 +20,32 @@ log = logging.getLogger(__name__)
 _client: MongoClient | None = None
 
 
-def get_client(uri: str | None = None, *, retries: int = 30,
-               delay: float = 2.0) -> MongoClient:
+def get_client(uri: str | None = None, *, retries: int | None = None,
+               delay: float | None = None,
+               timeout_ms: int | None = None) -> MongoClient:
     """Cliente de MongoDB con reintentos.
 
-    Los reintentos son necesarios porque en `docker compose up` la API y la
-    ingesta arrancan mientras Mongo todavia esta inicializando su replica de
-    autenticacion; sin esperar, el primer arranque falla siempre.
+    Los reintentos existen porque en `docker compose up` la ingesta arranca
+    mientras Mongo todavia esta inicializando su usuario de autenticacion; sin
+    esperar, el primer arranque falla siempre.
+
+    El presupuesto de espera NO es el mismo en todos los servicios, y eso
+    importa:
+
+    * Un trabajo por lotes (ingesta, Spark) puede y debe esperar minutos: si
+      Mongo tarda en arrancar, lo correcto es aguantar, no abortar el pipeline.
+    * La API NO puede esperar. Si Mongo esta caido, cada peticion debe fallar
+      rapido con un 503; con el presupuesto largo, una peticion se colgaria
+      varios minutos y agotaria los workers de Gunicorn con la base caida.
+
+    De ahi que los valores sean configurables y que `src/api/app.py` use un
+    presupuesto corto.
     """
     global _client
     target = uri or config.mongo.uri
+    retries = retries if retries is not None else config.mongo.connect_retries
+    delay = delay if delay is not None else config.mongo.connect_delay
+    timeout_ms = timeout_ms if timeout_ms is not None else config.mongo.select_timeout_ms
 
     if _client is not None:
         try:
@@ -43,8 +59,8 @@ def get_client(uri: str | None = None, *, retries: int = 30,
         try:
             client: MongoClient = MongoClient(
                 target,
-                serverSelectionTimeoutMS=5_000,
-                connectTimeoutMS=5_000,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
                 socketTimeoutMS=120_000,
                 retryWrites=True,
                 maxPoolSize=50,
@@ -65,9 +81,12 @@ def get_client(uri: str | None = None, *, retries: int = 30,
     ) from last_error
 
 
-def get_db(uri: str | None = None) -> Database:
-    """Base de datos de trabajo."""
-    return get_client(uri)[config.mongo.database]
+def get_db(uri: str | None = None, *, retries: int | None = None,
+           delay: float | None = None,
+           timeout_ms: int | None = None) -> Database:
+    """Base de datos de trabajo. Ver `get_client` sobre el presupuesto de espera."""
+    return get_client(uri, retries=retries, delay=delay,
+                      timeout_ms=timeout_ms)[config.mongo.database]
 
 
 def close_client() -> None:
