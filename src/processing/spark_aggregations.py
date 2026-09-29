@@ -181,14 +181,26 @@ def _driver_host() -> str:
 def read_accidents(spark: SparkSession, collection: str | None = None,
                    use_schema: bool = True) -> DataFrame:
     """Lee la coleccion principal desde MongoDB con el conector oficial."""
+    # Tamano de particion de LECTURA, en MB.
+    #
+    # Es la palanca que controla cuanta memoria necesita cada tarea, y la que
+    # importa de verdad en un equipo con poca RAM: el executor no falla por el
+    # volumen total, falla por el tamano de UNA particion. Con el valor por
+    # defecto del conector (64 MB) el executor se quedaba sin heap y moria con
+    # "ExecutorLostFailure ... Command exited with code 52" (el 52 de la JVM es
+    # OutOfMemoryError). Bajarlo a 32 MB duplica el numero de particiones y
+    # reduce a la mitad el pico por tarea, sin pedir mas memoria al sistema.
+    part_mb = os.environ.get("MONGO_READ_PARTITION_MB", "").strip() or "32"
+
     reader = (spark.read.format("mongodb")
               .option("database", config.mongo.database)
-              .option("collection", collection or config.mongo.collection))
+              .option("collection", collection or config.mongo.collection)
+              .option("partitioner.options.partition.size", part_mb))
     if use_schema:
         reader = reader.schema(ACCIDENT_SCHEMA)
     df = reader.load()
-    log.info("Leida la coleccion '%s' desde MongoDB",
-             collection or config.mongo.collection)
+    log.info("Leida la coleccion '%s' desde MongoDB (particiones de %s MB)",
+             collection or config.mongo.collection, part_mb)
     return df
 
 

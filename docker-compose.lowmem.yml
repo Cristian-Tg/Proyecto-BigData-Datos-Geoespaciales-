@@ -133,7 +133,11 @@ services:
           # pedia ~1084 MB y el contenedor de 850M llegaba al 99 % (medido:
           # 847 de 850 MiB) camino de un SIGKILL que ningun log de Spark
           # habria atribuido a la memoria.
-          memory: 1100M
+          # 1200M: dentro del contenedor conviven DOS JVM, el demonio Worker
+          # (~200 MB) y el proceso del Executor (heap + overhead). Con 512m de
+          # heap el executor moria con OutOfMemoryError (exit 52 de la JVM), asi
+          # que el heap sube a 640m; 200 + 640 + 256 = 1096 MB cabe en 1200M.
+          memory: 1200M
     command:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.worker.Worker
@@ -141,7 +145,7 @@ services:
       - --cores
       - "2"
       - --memory
-      - "768m"
+      - "896m"
       - --webui-port
       - "8081"
 
@@ -185,11 +189,15 @@ services:
 
   spark-job:
     environment:
-      # 512m de heap + 256m de overhead = 768m por executor, que es justo lo
-      # que anuncia el worker y cabe en su limite de 1100M.
-      SPARK_EXECUTOR_MEMORY: 512m
+      # 640m de heap + 256m de overhead = 896m por executor, que es lo que
+      # anuncia el worker. Con 512m de heap el executor se quedaba sin memoria
+      # al materializar una particion de lectura.
+      SPARK_EXECUTOR_MEMORY: 640m
       SPARK_EXECUTOR_MEMORY_OVERHEAD: 256m
       SPARK_DRIVER_MEMORY: 512m
+      # Particiones de lectura de 32 MB en lugar de los 64 MB por defecto del
+      # conector: reduce a la mitad el pico de memoria por tarea.
+      MONGO_READ_PARTITION_MB: "32"
     command: ["python3", "-m", "src.processing.spark_aggregations",
               # 8 particiones de shuffle en vez de 16: con un solo worker de
               # 2 nucleos, mas particiones solo anaden planificacion.
@@ -198,27 +206,27 @@ services:
     deploy:
       resources:
         limits:
-          # El driver solo planifica y recoge agregados; medido usa ~340 MB.
-          # 800M deja margen y libera presupuesto para el worker.
-          memory: 800M
+          # El driver solo planifica y recoge agregados; medido usa ~313 MB.
+          # 700M deja margen de sobra y libera presupuesto para el worker.
+          memory: 700M
 
   benchmark:
     # El benchmark es el caso mas exigente: levanta su propio LocalCluster de
     # Dask Y un driver de Spark en el mismo contenedor. Se ejecuta con el resto
     # de los motores APAGADOS (bootstrap.sh --lowmem lo hace asi).
     environment:
-      # 512m de heap + 256m de overhead: el proceso del executor consume la
-      # suma, no solo el heap.
-      SPARK_EXECUTOR_MEMORY: 512m
+      # Mismos valores que spark-job: el executor consume heap + overhead.
+      SPARK_EXECUTOR_MEMORY: 640m
       SPARK_EXECUTOR_MEMORY_OVERHEAD: 256m
       SPARK_DRIVER_MEMORY: 512m
+      MONGO_READ_PARTITION_MB: "32"
     command: ["python3", "-m", "src.benchmark.compare_dask_spark",
               "--dask-workers", "1,2", "--spark-cores", "1,2",
               "--repeats", "2",
               # 350 MB por worker de Dask: con 2 workers son 700 MB, que junto
               # al driver de Spark caben en el limite de 1400 MB.
               "--memory-limit", "350MB",
-              "--executor-memory", "512m",
+              "--executor-memory", "640m",
               "--shuffle-partitions", "8",
               "--out-dir", "/data/benchmark"]
     deploy:
