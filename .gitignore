@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# SECRETOS — nunca deben viajar al repositorio (criterio de evaluacion 20%)
+# ---------------------------------------------------------------------------
+.env
+.env.local
+kaggle.json
+**/kaggle.json
+.kaggle/
+# La carpeta secrets/ se versiona VACIA (solo su README), nunca su contenido
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+*.pem
+*.key
+
+# ---------------------------------------------------------------------------
+# Datos
+# ---------------------------------------------------------------------------
+data/
+*.csv
+*.csv.gz
+*.zip
+*.parquet
+!tests/fixtures/*.csv
+
+# ---------------------------------------------------------------------------
+# Resultados de benchmark (se regeneran; se versiona solo el informe)
+# ---------------------------------------------------------------------------
+benchmark_results/*.json
+benchmark_results/*.csv
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+junit*.xml
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Jenkins / Docker / IDE / SO
+# ---------------------------------------------------------------------------
+jenkins_home/
+.ivy2/
+spark-warehouse/
+derby.log
+metastore_db/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Documento fuente del enunciado (material del curso, no codigo)
+Trabajo_Big_Data_Geoespacial-1.docx

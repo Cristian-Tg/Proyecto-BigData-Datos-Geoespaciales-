@@ -1,0 +1,11 @@
+-r ingestion.txt
+-r api.txt
+
+# --- Pruebas (las ejecuta Jenkins y bloquean el despliegue si fallan) -------
+pytest==8.3.4
+pytest-cov==6.0.0
+mongomock==4.3.0        # pruebas de la API sin levantar MongoDB
+requests==2.32.3        # pruebas de integracion contra la API en vivo
+
+# --- Calidad de codigo -----------------------------------------------------
+ruff==0.8.4

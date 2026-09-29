@@ -1,0 +1,21 @@
+target-version = "py311"
+line-length = 100
+
+exclude = [".git", "__pycache__", ".venv", "data", "notebooks"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",    # la longitud de linea la controla line-length
+    "B008",    # los defaults con llamada son idiomaticos en dataclasses/Flask
+    "SIM108",  # el ternario no siempre es mas legible que un if/else
+    "UP038",   # isinstance(x, (int, float)) es idiomatico y mas legible que
+               # isinstance(x, int | float); la regla esta obsoleta en ruff >=0.9
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402"]
+"src/api/app.py" = ["C901"]   # create_app agrupa todas las rutas a proposito
+
+[lint.isort]
+known-first-party = ["src"]

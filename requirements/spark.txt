@@ -1,0 +1,8 @@
+-r base.txt
+
+# pyspark NO se instala aqui: ya viene en la imagen oficial de Apache Spark,
+# y una segunda copia por pip provocaria conflictos de version con los jars.
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==17.0.0         # habilita las conversiones Arrow entre Spark y pandas
+psutil==6.1.0

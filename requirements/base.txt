@@ -1,0 +1,5 @@
+# Dependencias comunes a todos los servicios.
+# Las versiones estan fijadas para que la imagen sea reproducible: un
+# `docker build` de hoy y uno de dentro de un mes deben instalar lo mismo.
+pymongo==4.10.1
+python-dotenv==1.0.1

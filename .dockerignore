@@ -1,0 +1,74 @@
+# ===========================================================================
+# Lo que NO debe viajar al contexto de build.
+#
+# Importa mucho: el contexto se envia completo al demonio de Docker antes de
+# ejecutar la primera instruccion. Sin este archivo, `.venv/` (cientos de MB),
+# `.git/` y el CSV descargado se transferirian en CADA build, multiplicando el
+# tiempo de construccion.
+#
+# Tambien es una defensa de seguridad: evita que un `.env` o un `kaggle.json`
+# terminen horneados dentro de una imagen.
+# ===========================================================================
+
+# --- Secretos: NUNCA dentro de una imagen ---------------------------------
+.env
+.env.*
+!.env.example
+kaggle.json
+**/kaggle.json
+secrets/
+.kaggle/
+*.pem
+*.key
+
+# --- Entornos virtuales y cache de Python ---------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Control de versiones e IDE -------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+.idea/
+.vscode/
+
+# --- Datos: viven en un volumen nombrado, no en la imagen -----------------
+data/
+*.csv
+*.csv.gz
+*.zip
+*.parquet
+benchmark_results/
+reports/
+
+# --- Estado de Jenkins ----------------------------------------------------
+jenkins_home/
+.ivy2/
+spark-warehouse/
+derby.log
+metastore_db/
+
+# --- Documentacion y notebooks: no hacen falta en tiempo de ejecucion -----
+docs/
+notebooks/
+*.md
+!requirements/*.md
+*.docx
+*.pdf
+
+# --- Archivos del sistema operativo ---------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

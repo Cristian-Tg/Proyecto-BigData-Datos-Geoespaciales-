@@ -1,0 +1,4 @@
+-r base.txt
+
+Flask==3.1.0
+gunicorn==23.0.0        # servidor WSGI de produccion; `flask run` no lo es

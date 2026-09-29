@@ -1,0 +1,19 @@
+-r base.txt
+
+# --- Dask: lectura particionada y computo distribuido ----------------------
+dask[dataframe,distributed]==2024.12.1
+distributed==2024.12.1
+bokeh==3.6.2            # panel de control de Dask en :8787
+
+# --- Manipulacion de datos -------------------------------------------------
+pandas==2.2.3
+# numpy fijado a la serie 1.x: PySpark 3.5 todavia no es totalmente compatible
+# con numpy 2, y el contenedor de benchmark comparte codigo con Spark.
+numpy==1.26.4
+pyarrow==17.0.0         # acelera la serializacion entre workers de Dask
+
+# --- Descarga del dataset --------------------------------------------------
+kaggle>=1.6.17,<2.0
+
+# --- Medicion de memoria en el benchmark -----------------------------------
+psutil==6.1.0
