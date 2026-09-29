@@ -1,0 +1,61 @@
+# ===========================================================================
+# Normalizacion de finales de linea.
+#
+# CRITICO para este proyecto: los scripts .sh y los Dockerfile se ejecutan
+# DENTRO de contenedores Linux. Si un clon en Windows los deja con CRLF,
+# fallan con errores del tipo:
+#
+#   /usr/local/bin/download-mongo-jars.sh: /usr/bin/env: bad interpreter:
+#   No such file or directory        <- en realidad es el \r final
+#
+# y la build de la imagen de Spark se cae sin un motivo evidente. Forzando LF
+# aqui, el repositorio se comporta igual en Windows, Linux y macOS.
+# ===========================================================================
+
+# Por defecto: Git normaliza a LF en el repositorio y entrega LF al disco.
+* text=auto eol=lf
+
+# --- Todo lo que corre dentro de un contenedor Linux: LF obligatorio -------
+*.sh              text eol=lf
+Dockerfile        text eol=lf
+*.Dockerfile      text eol=lf
+Makefile          text eol=lf
+*.mk              text eol=lf
+Jenkinsfile       text eol=lf
+*.py              text eol=lf
+*.js              text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+*.json            text eol=lf
+*.toml            text eol=lf
+*.ini             text eol=lf
+*.cfg             text eol=lf
+*.txt             text eol=lf
+*.md              text eol=lf
+*.html            text eol=lf
+*.css             text eol=lf
+.env.example      text eol=lf
+.gitignore        text eol=lf
+.dockerignore     text eol=lf
+
+# --- Scripts nativos de Windows: CRLF ------------------------------------
+*.ps1             text eol=crlf
+*.bat             text eol=crlf
+*.cmd             text eol=crlf
+
+# --- Binarios: que Git no los toque --------------------------------------
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.gif             binary
+*.ico             binary
+*.pdf             binary
+*.docx            binary
+*.xlsx            binary
+*.zip             binary
+*.gz              binary
+*.jar             binary
+*.parquet         binary
+
+# --- Datos: excluidos de las estadisticas de lenguaje de GitHub ----------
+*.csv             text eol=lf -diff linguist-generated
