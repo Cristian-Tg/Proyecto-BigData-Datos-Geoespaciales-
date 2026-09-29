@@ -46,6 +46,28 @@ print('numpy', numpy.__version__, '| pandas', pandas.__version__, \
 '| dask', dask.__version__)" \
  && rm -rf /tmp/requirements
 
+
+# ---------------------------------------------------------------------------
+# pyspark NO esta instalado por pip: vive dentro de la distribucion de Spark,
+# en /opt/spark/python, y solo `spark-submit` lo anade al PYTHONPATH. Un
+# `python3 -m mi_modulo` falla con ModuleNotFoundError: No module named
+# 'pyspark'.
+#
+# Se resuelve con un archivo .pth en site-packages en lugar de codificar la
+# ruta en PYTHONPATH, por dos razones:
+#   * el nombre del zip de py4j lleva su version (py4j-0.10.9.7-src.zip) y
+#     cambiaria al subir de version de Spark; aqui se descubre con un glob;
+#   * la comprobacion final hace que un cambio asi rompa el BUILD con un
+#     mensaje claro, en vez de reventar en ejecucion durante una sustentacion.
+RUN set -eux; \
+    SITE="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    PY4J="$(ls /opt/spark/python/lib/py4j-*-src.zip)"; \
+    # Dos echo en lugar de printf: el parser de Dockerfile trata el
+    # caracter de escape y partiria la instruccion en el salto de linea.
+    echo /opt/spark/python  > "$SITE/spark-python.pth"; \
+    echo "$PY4J"           >> "$SITE/spark-python.pth"; \
+    python3 -c 'import pyspark; print("pyspark", pyspark.__version__)'
+
 WORKDIR /app
 COPY src/ /app/src/
 

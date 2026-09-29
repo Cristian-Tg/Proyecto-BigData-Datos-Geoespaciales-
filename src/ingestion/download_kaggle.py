@@ -198,9 +198,19 @@ def obtain_dataset(force: bool = False) -> tuple[Path, str]:
                     "sintetico para poder validar el pipeline completo.")
         from src.ingestion.synthetic import generate_synthetic_csv  # noqa: PLC0415
 
+        # Se generan MAS filas de las pedidas a proposito. El generador inyecta
+        # un 3% de registros sucios y la limpieza los descarta, asi que pedir
+        # exactamente SAMPLE_SIZE deja el resultado por debajo del minimo de
+        # 1.000.000 que exige el enunciado (medido: 1.000.000 generadas ->
+        # 969.902 cargadas). El 12% de margen cubre el descarte con holgura.
+        objetivo = max(1_000_000, config.ingest.sample_size)
+        con_margen = int(objetivo * 1.12) + 1_000
+        log.info("Objetivo tras limpieza: %s registros -> se generan %s filas "
+                 "para absorber el 3%% de registros sucios inyectados",
+                 f"{objetivo:,}", f"{con_margen:,}")
         path = generate_synthetic_csv(
             Path(config.kaggle.data_dir) / config.kaggle.target_file,
-            n_rows=max(1_000_000, config.ingest.sample_size),
+            n_rows=con_margen,
         )
         return path, "synthetic"
 

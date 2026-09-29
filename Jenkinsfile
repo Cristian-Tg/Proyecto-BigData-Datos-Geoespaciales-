@@ -56,6 +56,10 @@ pipeline {
            description: 'Maximo de registros a cargar (minimo exigido: 1000000)')
     booleanParam(name: 'SKIP_MIN_RECORDS_CHECK', defaultValue: false,
                  description: 'No exigir el minimo de 1.000.000 (solo pruebas rapidas)')
+    choice(name: 'MEMORY_PROFILE', choices: ['auto', 'estandar', 'baja'],
+           description: 'auto detecta la RAM de Docker y elige el perfil. ' +
+                        '"baja" fuerza docker-compose.lowmem.yml y ejecuta ' +
+                        'los motores por fases (para equipos con 8 GB)')
   }
 
   environment {
@@ -150,6 +154,43 @@ credencial de tipo "Secret text" con ese ID.'''
 La ingesta usara el generador de datos sinteticos. Para descargar el dataset
 real, cree en Jenkins una credencial de tipo "Secret file" con el ID
 "kaggle-json" y suba su archivo kaggle.json.'''
+          }
+
+          // --- Perfil de memoria ----------------------------------------
+          // Con menos de 6 GB la configuracion estandar no cabe: solo los
+          // workers suman 8 GB (2 de Dask x 2g + 2 de Spark x 2g). Sin este
+          // ajuste el build muere por OOMKilled, y el sintoma es un
+          // `KilledWorker` o un timeout que no menciona la memoria.
+          String memRaw = sh(
+            script: "docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0",
+            returnStdout: true).trim()
+          long dockerMb = 0
+          try { dockerMb = (memRaw as long) / 1048576L } catch (Exception ignored) { }
+          echo "RAM disponible para Docker: ${dockerMb} MB"
+
+          boolean lowmem
+          if (params.MEMORY_PROFILE == 'baja') {
+            lowmem = true
+          } else if (params.MEMORY_PROFILE == 'estandar') {
+            lowmem = false
+          } else {
+            lowmem = dockerMb > 0 && dockerMb < 6000
+          }
+
+          env.LOWMEM = lowmem ? 'true' : 'false'
+          // Con COMPOSE_FILE no hace falta anadir -f en cada llamada. El
+          // separador ":" es el correcto porque Jenkins corre en Linux.
+          env.COMPOSE_FILE = lowmem
+            ? 'docker-compose.yml:docker-compose.lowmem.yml'
+            : 'docker-compose.yml'
+
+          if (lowmem) {
+            echo '''Perfil de BAJA MEMORIA activo:
+  - Spark con 1 worker (el enunciado exige al menos 1)
+  - Dask con 2 workers (el enunciado exige al menos 2)
+  - los motores se levantan y se bajan por fases: el pico nunca suma los dos'''
+          } else {
+            echo 'Perfil ESTANDAR: todos los servicios residentes a la vez.'
           }
 
           // --- Hay un despliegue estable al que poder volver? ------------
@@ -249,9 +290,15 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
       steps {
         sh '''
           set -eu
-          echo "Levantando la pila con las imagenes candidatas..."
-          docker compose up -d --remove-orphans \
-            mongo dask-scheduler dask-worker spark-master spark-worker api
+          if [ "$LOWMEM" = "true" ]; then
+            echo "Baja memoria: se levanta solo el nucleo (mongo + api)."
+            echo "Dask y Spark se levantan en su fase y se bajan al terminar."
+            docker compose up -d --remove-orphans mongo api
+          else
+            echo "Levantando la pila completa con las imagenes candidatas..."
+            docker compose up -d --remove-orphans \
+              mongo dask-scheduler dask-worker spark-master spark-worker api
+          fi
           echo "--- Estado de los servicios ---"
           docker compose ps
         '''
@@ -285,9 +332,11 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
           }
 
           wait_healthy mongo 60
-          wait_healthy dask-scheduler 40
-          wait_healthy spark-master 40
           wait_healthy api 60
+          if [ "$LOWMEM" != "true" ]; then
+            wait_healthy dask-scheduler 40
+            wait_healthy spark-master 40
+          fi
 
           echo "--- Conectividad entre contenedores ---"
           docker compose exec -T api curl -fsS http://localhost:5000/api/v1/health
@@ -314,6 +363,22 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
           String kaggleEnv = env.KAGGLE_AVAILABLE == 'true'
             ? "-e KAGGLE_USERNAME=${env.KAGGLE_USERNAME} -e KAGGLE_KEY=${env.KAGGLE_KEY}"
             : ''
+          // En baja memoria, Dask se levanta SOLO para esta fase: mantenerlo
+          // residente junto a Spark y a Jenkins no cabe en 4 GB.
+          sh '''
+            set -eu
+            if [ "$LOWMEM" = "true" ]; then
+              echo "Levantando Dask (scheduler + 2 workers) para la ingesta..."
+              docker compose up -d dask-scheduler dask-worker
+            n=0
+            until [ "$(docker inspect -f '{{.State.Health.Status}}' \
+                  "$(docker compose ps -q dask-scheduler | head -1)" \
+                  2>/dev/null)" = "healthy" ] || [ "$n" -ge 40 ]; do
+              printf "."; n=$((n+1)); sleep 3
+            done
+            echo " listo"
+            fi
+          '''
           sh """
             set -eu
             docker compose run --rm \
@@ -332,6 +397,12 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
             'cat /data/cleaning_stats.json 2>/dev/null || echo "{}"' \
             > "${REPORTS}/cleaning_stats.json"
           cat "${REPORTS}/cleaning_stats.json"
+
+          if [ "$LOWMEM" = "true" ]; then
+            echo "Bajando Dask para liberar memoria antes de Spark..."
+            docker compose stop dask-worker dask-scheduler || true
+            docker compose rm -f dask-worker dask-scheduler || true
+          fi
         '''
       }
     }
@@ -342,6 +413,18 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
       steps {
         sh '''
           set -eu
+          if [ "$LOWMEM" = "true" ]; then
+            echo "Levantando Spark (master + 1 worker) para las agregaciones..."
+            docker compose up -d spark-master spark-worker
+            n=0
+            until [ "$(docker inspect -f '{{.State.Health.Status}}' \
+                  "$(docker compose ps -q spark-master | head -1)" \
+                  2>/dev/null)" = "healthy" ] || [ "$n" -ge 40 ]; do
+              printf "."; n=$((n+1)); sleep 3
+            done
+            echo " listo"
+          fi
+
           docker compose run --rm spark-job
 
           echo "--- Resumen de las agregaciones ---"
@@ -349,6 +432,12 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
             'cat /data/spark_summary.json 2>/dev/null || echo "{}"' \
             > "${REPORTS}/spark_summary.json"
           cat "${REPORTS}/spark_summary.json"
+
+          if [ "$LOWMEM" = "true" ]; then
+            echo "Bajando Spark para liberar memoria antes de las pruebas..."
+            docker compose stop spark-worker spark-master || true
+            docker compose rm -f spark-worker spark-master || true
+          fi
         '''
       }
     }
@@ -454,6 +543,18 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
       steps {
         sh '''
           set -eu
+          if [ "$LOWMEM" = "true" ]; then
+            echo "Levantando Spark para el benchmark..."
+            docker compose up -d spark-master spark-worker
+            n=0
+            until [ "$(docker inspect -f '{{.State.Health.Status}}' \
+                  "$(docker compose ps -q spark-master | head -1)" \
+                  2>/dev/null)" = "healthy" ] || [ "$n" -ge 40 ]; do
+              printf "."; n=$((n+1)); sleep 3
+            done
+            echo " listo"
+          fi
+
           docker compose run --rm benchmark
 
           docker compose run --rm --no-deps --entrypoint sh benchmark -c \
@@ -463,6 +564,11 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
             'cat /data/benchmark/benchmark_latest.json 2>/dev/null || echo "{}"' \
             > "${REPORTS}/benchmark_latest.json"
           cat "${REPORTS}/benchmark_latest.md"
+
+          if [ "$LOWMEM" = "true" ]; then
+            docker compose stop spark-worker spark-master || true
+            docker compose rm -f spark-worker spark-master || true
+          fi
         '''
       }
     }
@@ -485,8 +591,14 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
         sh '''
           set -eu
           echo "Aplicando la configuracion desplegada..."
-          docker compose up -d --remove-orphans \
-            mongo dask-scheduler dask-worker spark-master spark-worker api
+          if [ "$LOWMEM" = "true" ]; then
+            # Residente queda el servicio: base de datos y API. Los motores se
+            # levantan cuando hay trabajo que procesar.
+            docker compose up -d --remove-orphans mongo api
+          else
+            docker compose up -d --remove-orphans \
+              mongo dask-scheduler dask-worker spark-master spark-worker api
+          fi
 
           echo "Verificacion final posterior al despliegue..."
           sleep 8

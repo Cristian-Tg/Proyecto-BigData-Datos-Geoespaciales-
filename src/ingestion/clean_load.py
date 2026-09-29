@@ -64,14 +64,27 @@ def process_and_load(pdf, mongo_uri: str, database: str, collection: str,
 
     if not clean.empty:
         clean = enrich_partition(clean, cell_deg=cell_deg, precision=precision)
-        docs = to_documents(clean)
 
         client = MongoClient(mongo_uri, serverSelectionTimeoutMS=20_000,
                              socketTimeoutMS=300_000)
         try:
             coll = client[database][collection]
-            for start in range(0, len(docs), batch_size):
-                chunk = docs[start:start + batch_size]
+            n_rows = len(clean)
+            # Los documentos se construyen POR LOTES y no de golpe.
+            #
+            # Convertir la particion completa con to_documents() y luego trocear
+            # la lista parecia mas simple, pero hacia que el consumo fuera
+            # O(tamano de particion): 250.000 dicts de Python con un subdocumento
+            # GeoJSON anidado cada uno son 500-700 MB solo en sobrecarga de
+            # objetos, muy por encima del limite del worker. El sintoma era un
+            # `KilledWorker` que no dice nada de memoria.
+            #
+            # Construyendo cada lote justo antes de insertarlo, el pico pasa a
+            # ser O(batch_size) y ademas se solapa la conversion con la escritura.
+            for start in range(0, n_rows, batch_size):
+                chunk = to_documents(clean.iloc[start:start + batch_size])
+                if not chunk:
+                    continue
                 try:
                     # ordered=False: un duplicado no aborta el lote completo,
                     # y permite que MongoDB inserte en paralelo.
@@ -89,6 +102,11 @@ def process_and_load(pdf, mongo_uri: str, database: str, collection: str,
                         raise RuntimeError(
                             f"Errores de escritura no esperados: {others[:3]}"
                         ) from bwe
+                finally:
+                    # El lote se descarta explicitamente: sin esto, la referencia
+                    # sobrevive hasta la siguiente vuelta del bucle y el pico de
+                    # memoria es de dos lotes en lugar de uno.
+                    del chunk
         finally:
             client.close()
 

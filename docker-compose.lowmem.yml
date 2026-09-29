@@ -85,7 +85,13 @@ services:
       replicas: 2
       resources:
         limits:
-          memory: 450M
+          # 600 MB de contenedor frente a 480 MB de limite de Dask: el margen es
+          # deliberado. Dask pausa el worker y vuelca a disco al acercarse a SU
+          # limite; si el limite del contenedor fuera el primero en alcanzarse,
+          # el kernel mataria el proceso (OOMKilled) sin darle oportunidad de
+          # reaccionar, y el error que se ve es un `KilledWorker` que no menciona
+          # la memoria.
+          memory: 600M
     command:
       - dask
       - worker
@@ -98,7 +104,7 @@ services:
       - --nthreads
       - "1"
       - --memory-limit
-      - "400MB"
+      - "480MB"
       - --death-timeout
       - "180"
 
@@ -149,13 +155,14 @@ services:
 
   ingestion:
     environment:
-      # 32 MB por particion: con 450 MB por worker, una particion de 64 MB de
-      # CSV se convierte en un DataFrame de pandas de ~250 MB y el worker se
-      # queda sin margen para construir los documentos.
-      DASK_BLOCKSIZE: 32MB
-      # Lotes mas pequenos: 20.000 documentos GeoJSON son ~12 MB de BSON en
-      # memoria antes de enviarlos.
-      BATCH_SIZE: "10000"
+      # 16 MB por particion. Con 32 MB, una particion del CSV se convierte en un
+      # DataFrame de pandas de unos 250 MB y, sumado al lote de documentos en
+      # construccion, el worker de 480 MB no tiene margen.
+      DASK_BLOCKSIZE: 16MB
+      # 5.000 documentos por lote. El consumo de la ingesta es O(batch_size)
+      # desde que los documentos se construyen lote a lote, asi que este numero
+      # es el que fija el pico real del worker.
+      BATCH_SIZE: "5000"
       # El minimo que exige el enunciado. Subirlo es seguro (el limite es el
       # disco, no la memoria), pero 1 M ya cumple y la ingesta tarda la mitad.
       SAMPLE_SIZE: "1000000"
