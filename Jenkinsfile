@@ -71,7 +71,12 @@ pipeline {
 
   environment {
     COMPOSE_PROJECT_NAME     = 'geobigdata'
-    COMPOSE_FILE             = 'docker-compose.yml'
+    // COMPOSE_FILE NO se declara aqui a proposito. En un pipeline declarativo,
+    // una variable del bloque environment NO se puede sobrescribir despues con
+    // `env.COMPOSE_FILE = ...`: la asignacion se ignora en silencio. Asi se
+    // perdio el perfil de baja memoria en todos los builds (el log decia
+    // 'BAJA MEMORIA activo' mientras compose usaba el perfil estandar) y el
+    // build #5 colgo el motor de Docker. Se fija en la etapa 2.
     NETWORK                  = 'geobigdata_geonet'
     DOCKER_BUILDKIT          = '1'
     COMPOSE_DOCKER_CLI_BUILD = '1'
@@ -181,7 +186,9 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
           } else if (params.MEMORY_PROFILE == 'estandar') {
             lowmem = false
           } else {
-            lowmem = dockerMb > 0 && dockerMb < 6000
+            // Si la deteccion falla (dockerMb == 0) se elige BAJA memoria: ante
+            // la duda, el perfil que no puede colgar el equipo.
+            lowmem = dockerMb == 0 || dockerMb < 6000
           }
 
           env.LOWMEM = lowmem ? 'true' : 'false'
@@ -191,6 +198,7 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
             ? 'docker-compose.yml:docker-compose.lowmem.yml'
             : 'docker-compose.yml'
 
+          echo "COMPOSE_FILE efectivo: ${env.COMPOSE_FILE}"
           if (lowmem) {
             echo '''Perfil de BAJA MEMORIA activo:
   - Spark con 1 worker (el enunciado exige al menos 1)
@@ -301,6 +309,16 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
             echo "Baja memoria: se levanta solo el nucleo (mongo + api)."
             echo "Dask y Spark se levantan en su fase y se bajan al terminar."
             docker compose up -d --remove-orphans mongo api
+
+            # Comprobacion: el perfil tiene que haberse APLICADO, no solo
+            # anunciado. Un fallo silencioso aqui ya colgo Docker una vez.
+            LIM=$(docker inspect -f '{{.HostConfig.Memory}}' "$(docker compose ps -q mongo | head -1)")
+            if [ "$LIM" = "0" ]; then
+              echo "ERROR: perfil de baja memoria anunciado pero NO aplicado (mongo sin limite)."
+              echo "COMPOSE_FILE=$COMPOSE_FILE"
+              exit 1
+            fi
+            echo "OK - perfil de baja memoria aplicado (mongo limitado a $((LIM/1048576)) MB)"
           else
             echo "Levantando la pila completa con las imagenes candidatas..."
             docker compose up -d --remove-orphans \
