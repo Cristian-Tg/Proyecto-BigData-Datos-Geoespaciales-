@@ -683,8 +683,15 @@ real, cree en Jenkins una credencial de tipo "Secret file" con el ID
                 echo "  restaurada  \$img:stable -> \$img:latest"
               fi
             done
-            docker compose up -d mongo dask-scheduler dask-worker \
-                                 spark-master spark-worker api
+            # En baja memoria se restaura solo el nucleo (mongo + api). Levantar
+            # Dask y Spark a la vez supera la RAM de un equipo de 8 GB y colgaria
+            # Docker justo durante una recuperacion.
+            if [ "\$LOWMEM" = "true" ]; then
+              docker compose up -d mongo api
+            else
+              docker compose up -d mongo dask-scheduler dask-worker \
+                                   spark-master spark-worker api
+            fi
             docker compose ps
             echo "Rollback terminado: la version estable anterior vuelve a estar en servicio."
           """
