@@ -151,6 +151,21 @@ credencial de tipo "Secret text" con ese ID.'''
             sh 'sed -i "s|__MONGO_PWD__|jenkins_dev_password_cambiar|g" .env'
           }
 
+          // --- Clave de CARTO para el mapa (opcional) -------------------
+          // Sin ella el mapa usa teselas de OpenStreetMap, que no la exigen.
+          try {
+            withCredentials([string(credentialsId: 'carto-api-key',
+                                    variable: 'CARTO_KEY')]) {
+              sh '''
+                set +x
+                printf 'CARTO_API_KEY=%s\\n' "$CARTO_KEY" >> .env
+              '''
+            }
+            echo 'OK - clave de CARTO tomada de la credencial "carto-api-key"'
+          } catch (Exception ignored) {
+            echo 'AVISO: sin credencial "carto-api-key"; el mapa usara OpenStreetMap.'
+          }
+
           // --- Token de Kaggle ------------------------------------------
           // Se resuelve aqui y se conserva solo en variables del build; no se
           // escribe en el workspace en ningun momento.

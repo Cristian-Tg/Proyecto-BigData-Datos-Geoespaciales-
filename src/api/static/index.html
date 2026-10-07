@@ -201,9 +201,19 @@
   const SEV = {1:"#60a5fa", 2:"#34d399", 3:"#fbbf24", 4:"#f87171"};
 
   const map = L.map("map", {preferCanvas:true}).setView([37.8, -96], 4);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:19, subdomains:"abcd"
-  }).addTo(map);
+  // La clave de CARTO llega desde la variable CARTO_API_KEY (la inyecta la API
+  // al servir esta pagina). Sin clave se usan las teselas de OpenStreetMap, que
+  // no la exigen, para que el mapa nunca muestre la marca "API key required".
+  const CARTO_KEY = "__CARTO_API_KEY__";
+  if (CARTO_KEY && CARTO_KEY.indexOf("__") !== 0) {
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=" + encodeURIComponent(CARTO_KEY), {
+      attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:19, subdomains:"abcd"
+    }).addTo(map);
+  } else {
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution:'&copy; OpenStreetMap', maxZoom:19
+    }).addTo(map);
+  }
 
   const layers = {
     points: L.layerGroup().addTo(map),

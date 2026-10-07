@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request
 from pymongo.errors import OperationFailure, PyMongoError
 from werkzeug.exceptions import HTTPException
 
@@ -539,8 +540,16 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
     @app.get("/")
     def index():
         static_dir = os.path.join(os.path.dirname(__file__), "static")
-        if os.path.isfile(os.path.join(static_dir, "index.html")):
-            return send_from_directory(static_dir, "index.html")
+        page = os.path.join(static_dir, "index.html")
+        if os.path.isfile(page):
+            # La clave de CARTO no se versiona: se toma del entorno y solo
+            # admite caracteres de clave para no inyectar nada en el script.
+            key = os.environ.get("CARTO_API_KEY", "")
+            if not re.fullmatch(r"[A-Za-z0-9_\-]*", key):
+                key = ""
+            with open(page, encoding="utf-8") as fh:
+                html = fh.read().replace("__CARTO_API_KEY__", key)
+            return Response(html, mimetype="text/html")
         return jsonify({"service": "geobigdata-api",
                         "docs": f"{API_PREFIX}/docs"})
 
