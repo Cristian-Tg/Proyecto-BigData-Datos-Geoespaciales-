@@ -77,6 +77,17 @@ class TestMetadatos:
         assert res.status_code == 200
         assert b"leaflet" in res.data.lower()
 
+    def test_el_mapa_recibe_la_clave_de_carto_del_entorno(self, client, monkeypatch):
+        monkeypatch.setenv("CARTO_API_KEY", "cb1_clave_de_prueba")
+        res = client.get("/")
+        assert b'"cb1_clave_de_prueba"' in res.data
+        assert b"__CARTO_API_KEY__" not in res.data
+
+    def test_una_clave_de_carto_invalida_no_se_inyecta(self, client, monkeypatch):
+        monkeypatch.setenv("CARTO_API_KEY", '";alert(1)//')
+        res = client.get("/")
+        assert b"alert(1)" not in res.data
+
     def test_cabeceras_cors_y_de_seguridad(self, client):
         res = client.get(f"{API}/docs")
         assert res.headers["Access-Control-Allow-Origin"] == "*"
