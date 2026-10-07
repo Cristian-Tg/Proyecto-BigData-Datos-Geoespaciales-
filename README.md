@@ -516,7 +516,16 @@ El smoke test verifica los tres endpoints obligatorios, el índice `2dsphere`,
 que haya datos cargados y que la API **rechace** parámetros inválidos con 400.
 
 Parámetros del build: `RUN_INGESTION`, `FORCE_DOWNLOAD`, `DROP_EXISTING`,
-`RUN_SPARK`, `RUN_BENCHMARK`, `SAMPLE_SIZE`, `SKIP_MIN_RECORDS_CHECK`.
+`RUN_SPARK`, `RUN_BENCHMARK`, `SAMPLE_SIZE`, `SKIP_MIN_RECORDS_CHECK`,
+`MEMORY_PROFILE`.
+
+> **`RUN_INGESTION` y `RUN_SPARK` están desactivados por defecto.** Un build
+> disparado por el webhook usa los valores por defecto, y con ambos activados
+> cada push relanzaría 15–40 min de ingesta y agregaciones; en un equipo de 8 GB
+> eso llegó a colgar el motor de Docker. Los datos viven en el volumen y la
+> ingesta es idempotente, así que basta con **marcarlos en el primer build de un
+> equipo nuevo** (con el volumen vacío) o cuando cambie el código de esas
+> etapas. Con ellos desmarcados, un build completo tarda unos 5 minutos.
 
 ---
 

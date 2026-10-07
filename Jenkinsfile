@@ -42,14 +42,21 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'RUN_INGESTION', defaultValue: true,
-                 description: 'Ejecutar la ingesta con Dask (Kaggle -> MongoDB)')
+    // Ingesta y Spark DESACTIVADOS por defecto. Un build disparado por el
+    // webhook usa los valores por defecto, y con ellos activados cada push
+    // relanzaba 15-40 min de ingesta y agregaciones. En un equipo con 8 GB eso
+    // agoto la memoria del host y colgo el motor de Docker (build #5). Los
+    // datos persisten en el volumen y la ingesta es idempotente, asi que solo
+    // hace falta activarlos en el primer build de un equipo nuevo o cuando
+    // cambie el codigo de esas etapas.
+    booleanParam(name: 'RUN_INGESTION', defaultValue: false,
+                 description: 'Ejecutar la ingesta con Dask (Kaggle -> MongoDB). Activar en el PRIMER build de un equipo nuevo')
     booleanParam(name: 'FORCE_DOWNLOAD', defaultValue: false,
                  description: 'Volver a descargar el dataset aunque ya este en el volumen')
     booleanParam(name: 'DROP_EXISTING', defaultValue: false,
                  description: 'Vaciar la coleccion antes de cargar')
-    booleanParam(name: 'RUN_SPARK', defaultValue: true,
-                 description: 'Ejecutar las agregaciones con Spark')
+    booleanParam(name: 'RUN_SPARK', defaultValue: false,
+                 description: 'Ejecutar las agregaciones con Spark. Activar en el PRIMER build de un equipo nuevo')
     booleanParam(name: 'RUN_BENCHMARK', defaultValue: false,
                  description: 'Ejecutar el benchmark Dask vs Spark (varios minutos)')
     string(name: 'SAMPLE_SIZE', defaultValue: '2000000',
