@@ -151,7 +151,7 @@ class TestGeohash:
 
     @pytest.mark.parametrize("lat,lon,precision,expected", [
         # Valores de referencia publicos de la especificacion de geohash
-        (42.6, -5.6, 5, "XXXXX"),                      # ejemplo de Wikipedia
+        (42.6, -5.6, 5, "ezs42"),                      # ejemplo de Wikipedia
         (57.64911, 10.40744, 11, "u4pruydqqvj"),       # ejemplo de Wikipedia
         (-25.382708, -49.265506, 6, "6gkzwg"),         # Curitiba
         (38.8977, -77.0365, 8, "dqcjqcpe"),            # Casa Blanca
