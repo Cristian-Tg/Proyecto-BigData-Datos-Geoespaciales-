@@ -7,7 +7,7 @@
 > mismo esquema: qué síntoma se vio, por qué el síntoma no señalaba la causa, y
 > qué se cambió.
 
-Dieciséis defectos. **Ninguno era detectable sin ejecutar el sistema**: el linter
+Veintisiete defectos. **Ninguno era detectable sin ejecutar el sistema**: el linter
 estaba en verde y las pruebas unitarias pasaban en todos los casos.
 
 ---
@@ -364,6 +364,80 @@ fija, los 8 años quedan cubiertos y `agg_temporal` pasa de 39 a 51 documentos
 
 ---
 
+## Bloque 6 — Aparecieron al poner en marcha Jenkins
+
+### 22. El perfil de baja memoria nunca se aplicaba dentro de Jenkins
+
+**Síntoma.** El build #5 dejó colgado el motor de Docker (errores 500 y 502 en
+cualquier llamada). El log decía «Perfil de BAJA MEMORIA activo».
+
+**Por qué engañaba.** El log afirmaba lo contrario de lo que pasaba. Al
+inspeccionar los contenedores, Mongo corría **sin límite** y con 1 GB de caché, y
+Spark con **dos** workers de 2 GB: el perfil estándar. El build #4, en verde,
+tampoco lo había aplicado; pasó porque no ejecutó Spark.
+
+**Causa.** En un pipeline declarativo, una variable del bloque `environment {}`
+**no se puede sobrescribir** después con `env.COMPOSE_FILE = …`. La asignación se
+ignora sin ningún aviso.
+
+**Corrección.** `COMPOSE_FILE` sale del bloque `environment` y se fija en la etapa
+2. Si la detección de RAM falla se elige el perfil **bajo** (antes caía al
+estándar, el que más memoria pide). Y la etapa 5 **verifica** que Mongo tenga
+límite de memoria y hace fallar el build si no lo tiene: un perfil anunciado pero
+no aplicado ya no puede pasar desapercibido.
+
+### 23. Abortar un build no detiene los contenedores que lanzó
+
+**Síntoma.** Tras abortar el build #5, el trabajo de Spark siguió vivo **40
+minutos**, junto con su master y sus workers, consumiendo memoria.
+
+**Causa.** Abortar detiene el proceso de Jenkins, no los contenedores que
+`docker compose run` ya había creado en el demonio del host.
+
+**Corrección.** Procedimiento documentado: tras abortar, eliminar los
+contenedores de trabajo (`docker rm -f` de los `*-run-*`, `spark-*`, `dask-*`).
+
+### 24. Los valores por defecto de los parámetros cambian un build tarde
+
+**Síntoma.** Se cambiaron `RUN_INGESTION` y `RUN_SPARK` a «desactivado» por
+defecto, y el build disparado por ese mismo push (#6) **ejecutó** la ingesta y
+Spark igualmente.
+
+**Causa.** Jenkins registra los parámetros declarados en el `Jenkinsfile` **al
+terminar de cargarlo**. Un build disparado por webhook usa los valores de la
+versión anterior; el cambio surte efecto desde el build siguiente.
+
+### 25. El rollback levantaba todos los motores a la vez
+
+**Causa.** El bloque `post { failure }` restauraba Mongo, Dask, Spark y la API
+juntos, ignorando el perfil. En un equipo de 8 GB eso supera la RAM y podía colgar
+Docker **justo durante la recuperación**.
+
+**Corrección.** En baja memoria el rollback restaura solo el núcleo (mongo + api).
+
+### 26. El secreto se interpolaba desde Groovy
+
+**Síntoma.** Aviso de Jenkins en cada build: *«A secret was passed to "writeFile"
+using Groovy String interpolation, which is insecure»*.
+
+**Corrección.** `writeEnvFile()` escribe un marcador y es el shell, dentro de
+`withCredentials`, quien lo sustituye leyendo la variable de entorno. El secreto
+no pasa por ninguna cadena de Groovy; el aviso desapareció desde el build #7.
+
+### 27. Las pruebas no contemplaban el conteo degradado
+
+**Síntoma.** En el build #6 fallaron 6 pruebas de integración con
+`TypeError: '>=' not supported between instances of 'NoneType' and 'int'`.
+
+**Causa.** Con 3,4 M de documentos y la máquina al límite, el conteo superó su
+tiempo máximo y la API devolvió `total_matching: null` con la marca de timeout,
+**tal como está diseñado**. Las pruebas comparaban ese `None` con un entero.
+
+**Corrección.** Helpers `_total()` y `_summary()`: `None` **con** la marca omite la
+prueba con su motivo; `None` **sin** la marca falla, porque eso sí sería un defecto.
+
+---
+
 ## Errores de operación, no del sistema
 
 Se anotan porque son fáciles de repetir.
@@ -381,6 +455,18 @@ como correcta.
 
 ---
 
+**Una credencial mal copiada en Jenkins.** El build #3 falló porque la API se
+quedaba `unhealthy`: el log de la API decía `OperationFailure`, que es un fallo de
+autenticación. La credencial `mongo-root-password` tenía 20 caracteres y la
+contraseña real 24. Copiarla con `Set-Clipboard` de PowerShell, en lugar de
+seleccionarla a mano, evita el problema.
+
+**Interpretar el Stage View de Jenkins.** Cuando una etapa falla, Jenkins pinta
+como «failed» todas las siguientes, con tiempos de milisegundos, aunque no se
+ejecutaron. El fallo real es la **primera** etapa roja con un tiempo largo.
+
+---
+
 ## Resumen
 
 | Bloque | Defectos | Qué tenían en común |
@@ -390,12 +476,14 @@ como correcta.
 | Pruebas de integración | 4 | una fixture mal definida ocultaba el resto |
 | Presupuesto de Spark | 3 | el overhead de la JVM no es opcional |
 | Método del benchmark | 2 | comparar cosas que no eran comparables |
+| Puesta en marcha de Jenkins | 6 | comportamientos de Jenkins que no avisan |
 
-**El patrón.** Trece de los veintiún defectos daban un mensaje de error que **no
+**El patrón.** Diecisiete de los veintisiete defectos daban un mensaje de error que **no
 señalaba la causa**: `exit 127` por un binario ausente que parecía un módulo
 ausente; `KilledWorker` y `exit 137` sin mencionar la memoria; `exit 52` sin decir
 `OutOfMemoryError`; `unhealthy` con el servidor sano; un 500 en `$near` cuando
-fallaba el conteo; un `ImportError` con el linter en verde.
+fallaba el conteo; un `ImportError` con el linter en verde; un log de Jenkins
+que anunciaba un perfil de memoria que no se estaba aplicando.
 
 La conclusión operativa es que ninguno se habría encontrado revisando el código.
 Hicieron falta la ejecución real, medir la memoria de cada contenedor y leer los

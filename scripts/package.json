@@ -1,0 +1,8 @@
+{
+  "name": "geobigdata-docs",
+  "private": true,
+  "description": "Genera los entregables .docx a partir del Markdown de docs/. Uso: cd scripts && npm install && node md2docx.js ../docs/informe-tecnico.md ../docs/Informe-Tecnico-BigData-Geoespacial.docx",
+  "dependencies": {
+    "docx": "9.9.0"
+  }
+}

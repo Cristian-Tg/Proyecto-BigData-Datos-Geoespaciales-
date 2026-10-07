@@ -23,7 +23,7 @@ python scripts/report_numbers.py --out docs/mediciones.md
 | − Duplicados por ID | 0 | 0.00 % |
 | **Cargados en MongoDB** | **1 240 933** | **100.0 %** |
 | Duplicados rechazados por el índice único | 0 | |
-| Tiempo de ingesta | 815.206 s | 1 522 reg/s |
+| Tiempo de ingesta | 112.757 s | 11 005 reg/s |
 
 - **Origen**: `/data/US_Accidents_March23.csv` (2916.51 MB)
 - **Particiones de Dask**: 191 de 16MB · **workers**: 2 · **lote**: 5 000 documentos
@@ -33,12 +33,12 @@ python scripts/report_numbers.py --out docs/mediciones.md
 
 | Colección | Documentos | Tiempo (s) |
 |---|---:|---:|
-| `agg_grid` | 23 280 | 26.366 |
-| `agg_hotspots` | 200 | 4.617 |
-| `agg_geohash` | 55 514 | 16.272 |
-| `agg_temporal` | 51 | 11.062 |
-| `agg_state` | 49 | 5.263 |
-| **Total** | | **186.484** |
+| `agg_grid` | 23 280 | 14.452 |
+| `agg_hotspots` | 200 | 2.695 |
+| `agg_geohash` | 55 514 | 11.891 |
+| `agg_temporal` | 51 | 8.821 |
+| `agg_state` | 49 | 3.685 |
+| **Total** | | **116.301** |
 
 - **Registros leídos de MongoDB**: 1 240 933
 - **Spark**: 3.5.3 · **executors**: 1
@@ -64,14 +64,14 @@ python scripts/report_numbers.py --out docs/mediciones.md
 
 | Consulta | Parámetros | `elapsed_ms` | Resultados |
 |---|---|---:|---:|
-| `$near` | radio 5 km | 1008.71 | 8 144 |
-| `$near` | radio 50 km | 25.42 | 102 687 |
-| `$near` | radio 5 km + `min_severity=3` | 46.12 | 2 280 |
-| `$geoWithin` | área de Los Ángeles | 10.22 | 66 190 |
-| `$geoWithin` | + `summary=true` | 30.59 | 66 190 |
-| `$geoNear` | 20 km, por severidad | 812.42 | 48 746 |
-| `$geoNear` | 20 km, bandas de 2 km | 774.49 | 48 746 |
-| `Spark` | `/aggregations/hotspots` top 20 | 4.22 | 200 |
+| `$near` | radio 5 km | 2692.06 | 8 144 |
+| `$near` | radio 50 km | 206.8 | 100 |
+| `$near` | radio 5 km + `min_severity=3` | 440.47 | 2 280 |
+| `$geoWithin` | área de Los Ángeles | 105.31 | 66 190 |
+| `$geoWithin` | + `summary=true` | 35.52 | 66 190 |
+| `$geoNear` | 20 km, por severidad | 1069.42 | 48 746 |
+| `$geoNear` | 20 km, bandas de 2 km | 891.38 | 48 746 |
+| `Spark` | `/aggregations/hotspots` top 20 | 3.06 | 200 |
 
 ## 4. Benchmark Dask vs Spark
 

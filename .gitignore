@@ -66,3 +66,6 @@ Trabajo_Big_Data_Geoespacial-1.docx
 # Los .docx de docs/ SI se versionan: son entregables generados por
 # scripts/md2docx.js a partir del Markdown, que es la fuente de verdad.
 !docs/*.docx
+
+# Dependencias de Node del generador de .docx (scripts/package.json)
+node_modules/

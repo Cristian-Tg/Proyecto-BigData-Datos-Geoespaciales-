@@ -183,7 +183,15 @@ volumen que procesa la siguiente.
 | Cargados en MongoDB | 1 240 933 |
 | Tasa de retención | **100,00 %** |
 | Particiones procesadas | 30 de 191 |
-| Tiempo de ingesta | 815,2 s (1 522 registros/s) |
+| Tiempo de ingesta | 76–113 s (11 000–16 400 registros/s) |
+
+El tiempo es el de dos ejecuciones con el equipo sin otra carga. Una primera
+medición dio 815 s (1 522 registros/s): se tomó con el host al límite de memoria
+y Windows paginando, y el sistema operativo llegó a detener procesos. Se
+descarta por no representativa; diez veces de diferencia por la misma carga
+sobre los mismos datos es el efecto de la memoria, no del motor. Las dos
+ejecuciones limpias reprodujeron **exactamente** los mismos 1 240 933 registros y
+el mismo conteo por año, gracias a la semilla fija del muestreo.
 
 #### Por qué la retención es del 100 % y la limpieza sigue siendo necesaria
 
@@ -246,6 +254,10 @@ Cinco colecciones nuevas, en 186,5 s sobre 1 240 933 registros:
 | `agg_temporal` | conteos por hora, día, mes y año | 51 | 11,06 s |
 | `agg_state` | conteo y % de graves por estado | 49 | 5,26 s |
 | | | | **186,48 s** |
+
+Una reejecución posterior sobre la misma muestra, con el equipo descargado,
+tardó 116,3 s y produjo exactamente los mismos documentos en las cinco
+colecciones.
 
 Los hotspots se ordenan por `count × avg_severity` y no por conteo puro: una
 celda con muchos accidentes leves no es igual de crítica que una con la mitad
@@ -568,7 +580,7 @@ medición no dice nada.
 
 | Etapa | Motor | Razón |
 |---|---|---|
-| Ingesta y limpieza | **Dask** | trabajo por partición, sin shuffle; reglas en pandas probadas con pytest; 1 522 registros/s |
+| Ingesta y limpieza | **Dask** | trabajo por partición, sin shuffle; reglas en pandas probadas con pytest; 11 000–16 400 registros/s |
 | Agregaciones | **Spark** | shuffle sobre decenas de miles de claves, conector nativo, cinco colecciones en 186,5 s |
 
 Si el dataset creciera de 1,2 M a 100 M de registros, la conclusión probablemente
@@ -580,7 +592,7 @@ extrapolación, no una medición, y se declara como tal.
 
 ## 5. Verificación y calidad
 
-**261 pruebas unitarias** más **52 de integración**, todas en verde.
+**261 pruebas unitarias** más **53 de integración**, todas en verde.
 
 | Archivo | Cubre |
 |---|---|
@@ -599,6 +611,40 @@ longitud de forma alternada en un solo bucle; la prueba cruzada las cuantiza por
 separado y entrelaza los bits al final. Que dos caminos distintos coincidan sobre
 puntos aleatorios significa que el resultado no depende de un detalle de
 implementación: se ejecutó sobre 20 000 puntos con cero discrepancias.
+
+### 5.1 Integración y despliegue continuo, verificado
+
+Cada `push` a `main` llega a Jenkins por un webhook de GitHub y dispara el
+pipeline sin intervención. Los builds que lo demuestran se conservan:
+
+| Build | Origen | Resultado |
+|---|---|---|
+| #7 | webhook | 261 + 53 pruebas en verde → **desplegado** (~2 min) |
+| #8 | webhook, commit `b0abf5e` con una prueba rota a propósito | se detiene en la **etapa 3**; no construye imágenes ni despliega; la imagen `stable` conserva el mismo identificador antes y después |
+| #9 | webhook, `revert` del anterior | todo en verde → **desplegado** |
+| #6 | webhook | 6 pruebas de integración fallan (conteo degradado bajo presión de memoria) → **sin despliegue**, rollback a `stable` |
+
+Los builds #8 y #6 son la evidencia del requisito central: **una prueba que
+falla detiene el despliegue**, una vez por una prueba unitaria y otra por una de
+integración contra la API en vivo.
+
+Tres comportamientos de Jenkins condicionaron el diseño, porque ninguno da aviso:
+
+- **Una variable del bloque `environment {}` no se puede sobrescribir después con
+  `env.X = …`**: la asignación se ignora. Así, el perfil de baja memoria se
+  anunciaba en el log pero no se aplicaba. Ahora se fija solo en la etapa 2 y la
+  etapa 5 **comprueba** que Mongo tenga límite de memoria, fallando si no.
+- **Los valores por defecto de los parámetros cambian un build tarde**: Jenkins
+  los registra al cargar el `Jenkinsfile`, así que el build que sube el cambio
+  aún usa los anteriores.
+- **Abortar un build no detiene los contenedores que lanzó.** Se documenta como
+  procedimiento: tras abortar, eliminar los contenedores de trabajo.
+
+Ingesta y Spark están **desactivados por defecto** en el pipeline: los datos
+persisten en el volumen y la ingesta es idempotente. Así cada push cuesta unos
+2 minutos en lugar de 30–40, que es lo que permite hacer un cambio en vivo y verlo
+desplegado durante la sustentación. Se activan en el primer build de un equipo
+nuevo.
 
 ---
 
