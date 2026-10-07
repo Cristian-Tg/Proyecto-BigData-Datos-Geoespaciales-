@@ -126,7 +126,16 @@ pipeline {
           try {
             withCredentials([string(credentialsId: 'mongo-root-password',
                                     variable: 'MONGO_PWD')]) {
-              writeEnvFile(env.MONGO_PWD)
+              // El secreto NO pasa por Groovy: se escribe una plantilla con un
+              // marcador y es el shell quien lo sustituye leyendo $MONGO_PWD.
+              // Interpolarlo en writeFile hace que Jenkins avise de que el
+              // secreto puede filtrarse ("A secret was passed to writeFile using
+              // Groovy String interpolation, which is insecure").
+              writeEnvFile()
+              sh '''
+                set +x
+                sed -i "s|__MONGO_PWD__|${MONGO_PWD}|g" .env
+              '''
               mongoCredOk = true
             }
           } catch (Exception ignored) {
@@ -138,7 +147,8 @@ pipeline {
             echo '''ADVERTENCIA: no existe la credencial "mongo-root-password".
 Se usa una contrasena de desarrollo. Para la entrega, cree en Jenkins una
 credencial de tipo "Secret text" con ese ID.'''
-            writeEnvFile('jenkins_dev_password_cambiar')
+            writeEnvFile()
+            sh 'sed -i "s|__MONGO_PWD__|jenkins_dev_password_cambiar|g" .env'
           }
 
           // --- Token de Kaggle ------------------------------------------
@@ -727,13 +737,13 @@ ninguna a 'stable': el despliegue no se realizo.'''
  * almacen de credenciales de Jenkins. El archivo se borra en el bloque
  * post/cleanup, de modo que no queda en el workspace ni en los artefactos.
  */
-void writeEnvFile(String mongoPassword) {
+void writeEnvFile() {
   writeFile file: '.env', text: """MONGO_ROOT_USER=geoadmin
-MONGO_ROOT_PASSWORD=${mongoPassword}
+MONGO_ROOT_PASSWORD=__MONGO_PWD__
 MONGO_DB=geobigdata
 MONGO_COLLECTION=accidents
 MONGO_PORT=27017
-MONGO_URI=mongodb://geoadmin:${mongoPassword}@mongo:27017/geobigdata?authSource=admin
+MONGO_URI=mongodb://geoadmin:__MONGO_PWD__@mongo:27017/geobigdata?authSource=admin
 
 KAGGLE_DATASET=sobhanmoosavi/us-accidents
 KAGGLE_FILE=US_Accidents_March23.csv

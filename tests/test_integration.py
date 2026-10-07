@@ -53,6 +53,39 @@ def _get(base, path, **params):
     return res
 
 
+def _total(body):
+    """Total de coincidencias, distinguiendo degradacion de defecto.
+
+    La API trata el conteo como metadato OPCIONAL: si supera su limite de
+    tiempo devuelve los resultados con `total_matching: null` y la marca
+    `total_matching_timed_out: true`, en lugar de un 500. Es comportamiento
+    documentado, no un fallo, y ocurre cuando la maquina esta bajo presion de
+    memoria (paso en el build #6, con 3,4 M de documentos).
+
+    - None CON la marca  -> se omite la prueba con el motivo, porque no puede
+      verificar nada sobre un total que no existe.
+    - None SIN la marca  -> falla: eso si seria un defecto de la API.
+    """
+    total = body.get("total_matching")
+    if total is None:
+        if body.get("total_matching_timed_out"):
+            pytest.skip("el conteo supero su limite de tiempo y la API lo "
+                        "degrado a null (comportamiento documentado)")
+        pytest.fail(f"total_matching es None sin la marca de timeout: {body.get('query')}")
+    return total
+
+
+def _summary(body):
+    """Resumen del area, con la misma distincion que `_total`."""
+    s = body.get("summary")
+    if s is None:
+        if body.get("summary_timed_out"):
+            pytest.skip("el resumen del area supero su limite de tiempo y la "
+                        "API lo degrado a null (comportamiento documentado)")
+        pytest.fail("summary es None sin la marca de timeout")
+    return s
+
+
 # ---------------------------------------------------------------------------
 # Disponibilidad del sistema
 # ---------------------------------------------------------------------------
@@ -147,14 +180,14 @@ class TestConsultaNear:
             assert lat == pytest.approx(doc["lat"], abs=1e-6)
 
     def test_el_total_es_coherente_con_lo_devuelto(self, resultado):
-        assert resultado["total_matching"] >= resultado["returned"]
+        assert _total(resultado) >= resultado["returned"]
 
     def test_un_radio_mayor_nunca_devuelve_menos(self, base):
         pequeno = _get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
                        radius_m=2000, limit=1).json()
         grande = _get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
                       radius_m=50000, limit=1).json()
-        assert grande["total_matching"] >= pequeno["total_matching"]
+        assert _total(grande) >= _total(pequeno)
 
     def test_el_filtro_de_severidad_funciona(self, base):
         res = _get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
@@ -261,8 +294,8 @@ class TestConsultaWithin:
             assert exceso_m < 100,                 f"{doc['accident_id']} excede la latitud en {exceso_m:.0f} m"
 
     def test_el_resumen_del_area_es_coherente(self, resultado):
-        s = resultado["summary"]
-        assert s["count"] == resultado["total_matching"]
+        s = _summary(resultado)
+        assert s["count"] == _total(resultado)
         assert 1 <= s["avg_severity"] <= 4
         assert 1 <= s["max_severity"] <= 4
         assert s["severe_count"] <= s["count"]
@@ -277,7 +310,7 @@ class TestConsultaWithin:
             f"{base}{API}/within",
             json={"geometry": bbox_to_polygon(-118.6, 33.8, -118.0, 34.3),
                   "limit": 1}, timeout=TIMEOUT).json()
-        assert grande["total_matching"] >= pequeno["total_matching"]
+        assert _total(grande) >= _total(pequeno)
 
     def test_un_poligono_en_medio_del_oceano_devuelve_cero(self, base):
         """Medio del Pacifico: no debe haber accidentes de EE.UU. ahi."""
@@ -286,7 +319,7 @@ class TestConsultaWithin:
             json={"geometry": bbox_to_polygon(-150.0, 0.0, -140.0, 5.0),
                   "limit": 10}, timeout=TIMEOUT)
         assert res.status_code == 200
-        assert res.json()["total_matching"] == 0
+        assert _total(res.json()) == 0
 
     def test_acepta_multipolygon(self, base):
         geom = {"type": "MultiPolygon", "coordinates": [
@@ -306,7 +339,7 @@ class TestConsultaWithin:
             f"{base}{API}/within",
             json={"geometry": bbox_to_polygon(*self.BBOX), "limit": 1},
             timeout=TIMEOUT).json()
-        assert via_get["total_matching"] == via_post["total_matching"]
+        assert _total(via_get) == _total(via_post)
 
     def test_un_poligono_sin_cerrar_devuelve_400(self, base):
         res = requests.post(f"{base}{API}/within", json={"geometry": {
@@ -361,7 +394,7 @@ class TestAgregacionGeoNear:
                   limit=500).json()
         near = _get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
                     radius_m=TEST_RADIUS_M, limit=1).json()
-        assert gn["total_in_radius"] == near["total_matching"]
+        assert gn["total_in_radius"] == _total(near)
 
     def test_el_pipeline_se_expone_y_empieza_con_geonear(self, base):
         body = _get(base, f"{API}/geonear", lat=TEST_LAT, lon=TEST_LON,
@@ -442,7 +475,7 @@ class TestResultadosDeSpark:
         todo = _get(base, f"{API}/aggregations/grid", limit=1).json()
         zona = _get(base, f"{API}/aggregations/grid", limit=1,
                     bbox="-119,33,-117,35").json()
-        assert zona["total_matching"] <= todo["total_matching"]
+        assert _total(zona) <= _total(todo)
 
     def test_la_suma_de_la_grilla_no_supera_el_total_de_registros(self, base,
                                                                   indice, stats):
@@ -465,12 +498,13 @@ class TestCoherenciaEntreOperadores:
         bbox = (TEST_LON - media_lado_deg, TEST_LAT - media_lado_deg,
                 TEST_LON + media_lado_deg, TEST_LAT + media_lado_deg)
 
-        circulo = _get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
-                       radius_m=radio, limit=1).json()["total_matching"]
+        circulo = _total(_get(base, f"{API}/near", lat=TEST_LAT, lon=TEST_LON,
+                              radius_m=radio, limit=1).json())
         cuadrado = requests.post(
             f"{base}{API}/within",
             json={"geometry": bbox_to_polygon(*bbox), "limit": 1},
-            timeout=TIMEOUT).json()["total_matching"]
+            timeout=TIMEOUT).json()
+        cuadrado = _total(cuadrado)
 
         assert cuadrado <= circulo, (
             "el cuadrado inscrito no puede contener mas puntos que el circulo")
@@ -482,7 +516,7 @@ class TestCoherenciaEntreOperadores:
         b = _get(base, f"{API}/near", **params).json()
         assert [d["accident_id"] for d in a["results"]] == \
                [d["accident_id"] for d in b["results"]]
-        assert a["total_matching"] == b["total_matching"]
+        assert _total(a) == _total(b)
 
 
 # ---------------------------------------------------------------------------
