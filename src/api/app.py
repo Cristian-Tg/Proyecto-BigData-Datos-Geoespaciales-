@@ -507,6 +507,27 @@ def create_app(ensure_idx: bool | None = None) -> Flask:
         return jsonify(result)
 
     # =======================================================================
+    # Accidentes por severidad en un estado
+    # =======================================================================
+    @app.get(f"{API_PREFIX}/severity_by_state")
+    def severity_by_state():
+        state = request.args.get("state", "").strip().upper()
+        if len(state) != 2:
+            raise ValueError("Indique 'state' con el codigo de 2 letras, p. ej. CA")
+        db = _db()
+        pipeline = [
+            {"$match": {"state": state}},
+            {"$group": {"_id": "$severity", "n": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+        ]
+        grupos = [{"severity": d["_id"], "n": d["n"]}
+                  for d in db[config.mongo.collection].aggregate(pipeline)]
+        return jsonify({"state": state,
+                        "total": sum(g["n"] for g in grupos),
+                        "por_severidad": grupos})
+
+
+    # =======================================================================
     # Benchmark Dask vs Spark
     # =======================================================================
     @app.get(f"{API_PREFIX}/benchmark")

@@ -396,3 +396,14 @@ class TestSalud:
         res = client.get(f"{API}/near?lat=34&lon=-118&radius_m=5000")
         assert res.status_code == 503
         assert res.get_json()["error"] == "falta_indice_geoespacial"
+
+class TestSeverityByState:
+    def test_agrupa_por_severidad_en_el_estado(self, client, stub_db):
+        res = client.get(f"{API}/severity_by_state?state=ca")
+        assert res.status_code == 200
+        assert res.get_json()["state"] == "CA"
+        pipeline = stub_db["accidents"].aggregate_calls[-1]
+        assert pipeline[0] == {"$match": {"state": "CA"}}
+
+    def test_exige_el_codigo_del_estado(self, client, stub_db):
+        assert client.get(f"{API}/severity_by_state").status_code == 400
